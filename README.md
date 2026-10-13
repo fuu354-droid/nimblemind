@@ -14,9 +14,9 @@ approval.
   command you name), then approval, then storage.
 - **You approve what it remembers.** Background writes wait in a pending
   queue until you approve them at a terminal, or until you grant that write
-  path standing approval with `memila-brain approval allow <path>`. Every stored record is logged
-  with its content hash, and `memila-brain audit` checks the store against
-  that log.
+  path standing approval with `memila-brain approval allow <path>`. Every
+  stored record is logged with its hash, and `memila-brain audit` checks the
+  store against that log.
 - **One injection budget.** The label, the last journal, older recall and any
   truncation note all count against one cap, and every cut is named.
 
@@ -85,7 +85,7 @@ namespace = "work"
 
 [journal]
 language = "English"
-banned_chars = ["—"]
+banned_chars = ["\u2014"]   # em dash
 
 [isolation]
 checks = ["builtin-secrets", "builtin-patterns"]
