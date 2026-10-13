@@ -26,10 +26,11 @@ def test_project_found_from_a_subdirectory(tmp_path):
     assert c.project_file == f and c["journal"]["max_words"] == 300
 
 
-def test_relative_cwd_finds_no_project(tmp_path, monkeypatch):
+def test_relative_cwd_is_refused_not_treated_as_no_project(tmp_path, monkeypatch):
     root, _ = project(tmp_path, '[journal]\nmax_words = 300\n')
     monkeypatch.chdir(root)
-    assert config_mod.load("sub").project_file is None
+    with pytest.raises(config_mod.ConfigError, match="absolute"):
+        config_mod.load("sub")
 
 
 def test_project_cannot_widen_approval_or_budget(tmp_path, user_config):

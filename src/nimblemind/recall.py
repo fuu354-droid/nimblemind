@@ -15,7 +15,6 @@ stored records, never `pending/` or `held/`.
 from __future__ import annotations
 
 from nimblemind import journal, writes
-from nimblemind.backends import BackendError
 
 RECALL_QUERY = "unfinished work next steps blockers decisions pitfalls"
 
@@ -44,10 +43,9 @@ def older(cfg, exclude: str, k: int) -> list[str]:
     """Up to k recall snippets, never the journal already shown in full."""
     if k <= 0:
         return []
-    try:
-        hits = writes.recall_backend(cfg).recall(RECALL_QUERY, cfg.namespace, k + 1)
-    except BackendError:
-        return []
+    # A backend failure propagates: section 9's fail-open means nothing is
+    # injected at all, not core memory without its recall.
+    hits = writes.recall_backend(cfg).recall(RECALL_QUERY, cfg.namespace, k + 1)
     out = []
     for ev in hits:
         if ev.source_id == exclude:

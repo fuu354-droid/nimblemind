@@ -43,7 +43,8 @@ def confirm(question: str) -> str:
 
 
 def _cfg(args) -> config_mod.Config:
-    cfg = config_mod.load(getattr(args, "cwd", None) or Path.cwd())
+    # A relative --cwd means relative to where the command runs.
+    cfg = config_mod.load(Path(getattr(args, "cwd", None) or Path.cwd()).resolve())
     if getattr(args, "namespace", None):
         cfg.data["namespace"] = args.namespace
     for note in cfg.notes:
@@ -60,6 +61,16 @@ def _out(args, obj, text: str) -> None:
 
 # ---- hooks ---------------------------------------------------------------
 
+def _hook_cwd(payload: dict) -> str:
+    """The payload's cwd, which must be absolute: a relative one would be
+    resolved against this process rather than the session, so it is a failed
+    call (silent), never a reason to run without the project config."""
+    cwd = payload.get("cwd") or ""
+    if not Path(cwd).is_absolute():
+        raise ValueError(f"hook payload cwd is not an absolute path: {cwd!r}")
+    return cwd
+
+
 def cmd_hook(args) -> int:
     from nimblemind import distill, harness, model, recall
 
@@ -70,15 +81,21 @@ def cmd_hook(args) -> int:
     try:
         if model.is_child():
             return 0
-        # The harness decides how the payload is read, so it is resolved
-        # before the payload: from --harness, else from the config that
-        # applies with no project (user config and environment). Then the
-        # project config is loaded from the cwd that harness found.
-        name = args.harness or config_mod.load(None)["harness"]
+        # The harness decides how the payload is read, so it is chosen
+        # before the payload: --harness, else the config for this process's
+        # directory (a harness runs its hooks in the session's project, so a
+        # trusted project's own harness is found). The payload's cwd then
+        # decides the config; if that config names another harness, the
+        # payload is read again with it.
+        name = args.harness or config_mod.load(Path.cwd())["harness"]
         h = harness.load(name)
         payload = h.read_payload(raw)
-        cfg = config_mod.load(payload.get("cwd") or None)
-        cfg.data["harness"] = name
+        cfg = config_mod.load(_hook_cwd(payload))
+        if not args.harness and cfg["harness"] != h.name:
+            h = harness.load(cfg["harness"])
+            payload = h.read_payload(raw)
+            cfg = config_mod.load(_hook_cwd(payload))
+        cfg.data["harness"] = h.name
         if args.event == "session-start":
             block = recall.assemble(cfg)
             if block:
@@ -108,7 +125,7 @@ def cmd_hook(args) -> int:
 def cmd_distill(args) -> int:
     from nimblemind import distill
 
-    cfg = config_mod.load(args.cwd or None)
+    cfg = config_mod.load(Path(args.cwd).resolve() if args.cwd else None)
     if args.harness:
         cfg.data["harness"] = args.harness
     try:

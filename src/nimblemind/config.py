@@ -315,7 +315,11 @@ def untrust(project_file: Path) -> bool:
 # ---- load ----------------------------------------------------------------
 
 def load(cwd: Path | str | None = None) -> Config:
-    """The effective config for a session working in `cwd`."""
+    """The effective config for a session working in `cwd`. A relative `cwd`
+    is refused rather than treated as "no project": that would quietly drop
+    the project's restrictions."""
+    if cwd and not Path(cwd).is_absolute():
+        raise ConfigError(f"cwd must be an absolute path, got {str(cwd)!r}")
     notes: list[str] = []
     user = _load_toml(paths.user_config())
     user_approval = user.pop("approval", None) or {}
