@@ -91,7 +91,9 @@ def say(*parts, file=None) -> None:
 
 def _out(args, obj, text: str) -> None:
     if getattr(args, "json", False):
-        print(json.dumps(obj, ensure_ascii=False, indent=2))
+        # default=str: TOML dates and times are valid config values JSON has
+        # no type for; they print as their ISO text instead of crashing.
+        print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
     elif text:
         say(text)
 
@@ -436,7 +438,7 @@ def cmd_config(args) -> int:
          json.dumps({"data_home": str(paths.data_home()), "user_config": str(paths.user_config()),
                      "project_config": str(cfg.project_file or ""),
                      "project_trusted": cfg.project_trusted, "effective": cfg.data},
-                    ensure_ascii=False, indent=2))
+                    ensure_ascii=False, indent=2, default=str))
     return 0
 
 
@@ -449,12 +451,16 @@ def cmd_migrate(args) -> int:
         raise SystemExit("migrate needs a source directory (positional, or --from)")
     from nimblemind.fsutil import path_kind
 
+    from nimblemind.fsutil import list_suffix
+
+    # Everything that would make migrate.run fail is checked before a person
+    # is asked: a missing source, a file, a directory that cannot be listed.
     try:
-        kind = path_kind(Path(source).expanduser())
-    except OSError:
-        kind = "dir"  # let migrate.run report exactly why it cannot be listed
-    if kind != "dir":
-        raise SystemExit(visible(f"FAIL {source}: not a directory"))
+        if path_kind(Path(source).expanduser()) != "dir":
+            raise SystemExit(visible(f"FAIL {source}: not a directory"))
+        list_suffix(Path(source).expanduser(), ".md")
+    except OSError as e:
+        raise SystemExit(visible(f"FAIL {source}: cannot be listed: {e.strerror or e}")) from None
     if not args.dry_run:
         confirm(f"Import every passing file in {source} into namespace {cfg.namespace!r}?")
     lines = migrate.run(cfg, Path(source).expanduser(), args.kind, dry_run=args.dry_run)
