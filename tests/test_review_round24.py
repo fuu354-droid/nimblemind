@@ -23,7 +23,8 @@ def test_f24_1_unreadable_migrate_source_is_a_failure(cfg, tmp_path):
     try:
         lines = migrate.run(cfg(), src, "journal", dry_run=True)
         assert lines == [f"FAIL {src}: cannot be listed: Permission denied"]
-        assert cli.main(["migrate", "--dry-run", str(src)]) == 1
+        with pytest.raises(SystemExit, match="cannot be listed"):  # refused up front (round 29)
+            cli.main(["migrate", "--dry-run", str(src)])
     finally:
         src.chmod(0o700)
 
