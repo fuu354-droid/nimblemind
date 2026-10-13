@@ -538,7 +538,7 @@ def load(cwd: Path | str | None = None) -> Config:
                     data["isolation"]["project_added_command"] = True
             if "timeout" in iso and (not _finite_number(iso["timeout"])
                                      or not 0 < iso["timeout"] <= MAX_TIMEOUT):
-                raise ConfigError(f"{project_file}: isolation.timeout must be a positive number")
+                raise ConfigError(f"{project_file}: isolation.timeout must be a positive number of seconds, at most {MAX_TIMEOUT}")
             if isinstance(iso.get("timeout"), (int, float)) and iso["timeout"] > 0:
                 data["isolation"]["timeout"] = min(data["isolation"]["timeout"], iso["timeout"])
 
