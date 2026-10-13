@@ -50,7 +50,11 @@ Non-goals, ruled in the origin task:
   0700): never in the session's project, whose files a relative lookup
   would find, and never in the shared system temp directory, where another
   local user could plant files. Executables must resolve to an absolute
-  path, looked up without the current directory.
+  path, looked up without the current directory. Prompt text never goes on
+  a command line (on Windows an npm-installed `claude` is a `.cmd` shim run
+  through `cmd.exe`); it goes on stdin, and the model name must be a plain
+  token. "The current directory" is the logical one (`$PWD` when it names
+  the same directory), so a symlinked directory stays unresolved.
 - No shell wrapper. Every hook command is the console script itself, so the
   same command line works under bash, zsh, PowerShell and cmd.
 - File locking uses `fcntl` on POSIX and `msvcrt` on Windows behind one helper.
@@ -315,8 +319,10 @@ Nothing else in the package calls `Backend.store`.
   with stdout as the report, anything else means the check could not run. This
   is how the origin workspace keeps its own `check_output.py` without the
   package knowing its layout. `{project}` expands to the directory of the
-  project config that applies (a check naming it with no project config is
-  `unavailable`), so a project-relative checker is written
+  project config that applies, and only when that config is trusted: it
+  names the repository's own files, which never run without trust. A check
+  naming it with no trusted project config is `unavailable`, so the write
+  is held. A project-relative checker is written
   `["python", "{project}/scripts/check.py", "{file}"]`. The executable must
   be an absolute path or found on `PATH`; anything else is `unavailable`. A
   trusted project's `command` runs in addition to the user's, never

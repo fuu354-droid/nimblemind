@@ -21,11 +21,12 @@ from nimblemind.records import Record
 MARKS = (".quarantine.md", ".unscanned.md")
 
 
-def _stem(name: str) -> tuple[str, bool]:
+def _stem(name: str) -> tuple[str, str]:
+    """(stem, mark): mark is "" for a plain file, else the old layout's mark."""
     for m in MARKS:
         if name.endswith(m):
-            return name[: -len(m)], True
-    return name[: -len(".md")], False
+            return name[: -len(m)], m
+    return name[: -len(".md")], ""
 
 
 def run(cfg, source: Path, kind: str, *, dry_run: bool = False) -> list[str]:
@@ -47,9 +48,13 @@ def run(cfg, source: Path, kind: str, *, dry_run: bool = False) -> list[str]:
         except OSError as e:
             lines.append(f"FAIL {f.name}: {e}")
             continue
-        rec = Record(source_id=prefix + stem, namespace=cfg.namespace, kind=kind,
-                     content=content, metadata={"migrated_from": str(f)},
-                     created_at=mtime.isoformat(timespec="seconds"))
+        try:
+            rec = Record(source_id=prefix + stem, namespace=cfg.namespace, kind=kind,
+                         content=content, metadata={"migrated_from": str(f)},
+                         created_at=mtime.isoformat(timespec="seconds"))
+        except ValueError as e:
+            lines.append(f"FAIL {f.name}: {e}")
+            continue
         existing = local.get(rec.source_id, cfg.namespace)
         if existing is not None and existing.digest == rec.digest:
             lines.append(f"skip {f.name}: already imported")
@@ -68,12 +73,15 @@ def run(cfg, source: Path, kind: str, *, dry_run: bool = False) -> list[str]:
         if marked:
             # Judged and refused (or never judged) by the old layout's own
             # gate: held as it was, never re-judged into storage here.
-            writes._save_entry(cfg.layout().held, {
+            verdict = isolation.UNAVAILABLE if marked == ".unscanned.md" else isolation.REFUSED
+            entry_id = writes._save_entry(cfg.layout().held, {
                 "record": rec.to_dict(), "path": "cli", "sha256": rec.digest,
-                "verdict": isolation.REFUSED, "report": "marked in the source layout",
+                "verdict": verdict, "report": f"marked {marked} in the source layout",
                 "held_at": rec.created_at,
             })
-            lines.append(f"held {f.name}: marked in the source layout")
+            writes._log(cfg, f"held migrate {cfg.namespace} {rec.source_id} -> held/{entry_id}: "
+                             f"marked {marked}")
+            lines.append(f"held {f.name}: marked {marked} in the source layout")
             continue
         # The one write path: isolation, then this path's approval level
         # (`deny` refuses here too), with the person who ran migrate as the

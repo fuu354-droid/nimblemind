@@ -136,3 +136,19 @@ def private_dir():
         yield d
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def logical_cwd() -> str:
+    """The current directory as the shell names it, symlinks unresolved.
+    `os.getcwd()` returns the physical path on POSIX, with every symlink
+    already followed, so `$PWD` is used whenever it is absolute and names
+    the same directory; otherwise `getcwd()`."""
+    pwd = os.environ.get("PWD", "")
+    here = os.getcwd()
+    if pwd and os.path.isabs(pwd):
+        try:
+            if os.path.samefile(pwd, here):
+                return os.path.normpath(pwd)
+        except OSError:
+            pass
+    return here

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 
+from nimblemind.fsutil import logical_cwd
 from nimblemind.harness import condense
 
 
@@ -32,7 +33,7 @@ class ClaudeCode:
             raise ValueError("hook payload is not a JSON object")
         out = {k: data[k] for k in ("session_id", "cwd", "transcript_path", "prompt")
                if isinstance(data.get(k), str)}
-        out.setdefault("cwd", os.getcwd())
+        out.setdefault("cwd", logical_cwd())
         return out
 
     def conversation(self, transcript_path: str, max_chars: int) -> tuple[str, int]:

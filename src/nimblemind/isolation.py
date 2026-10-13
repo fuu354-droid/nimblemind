@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import tempfile
 from dataclasses import dataclass
 
 from nimblemind.fsutil import private_dir, which
@@ -73,13 +72,16 @@ def _command(content: str, iso: dict, argv: list, project: str = "") -> Verdict:
     executable must resolve to an absolute path; anything else is
     `unavailable` and the write is held."""
     if any("{project}" in a for a in argv) and not project:
-        return Verdict(UNAVAILABLE, "isolation command uses {project} but no project config applies")
+        return Verdict(UNAVAILABLE, "isolation command uses {project} but no trusted project "
+                                    "config applies")
     argv = [a.replace("{project}", project) for a in argv]
     if not argv:
         return Verdict(UNAVAILABLE, "isolation.checks names `command` but isolation.command is empty")
-    fd, path = tempfile.mkstemp(prefix="nimblemind-scan-", suffix=".md")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+    # The content file and the child's working directory both live in one
+    # private directory under the data home, removed afterwards.
+    with private_dir() as cwd:
+        path = os.path.join(cwd, "content.md")
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(content)
         cmd = [a.replace("{file}", path) for a in argv]
         if not any("{file}" in a for a in argv):
@@ -90,30 +92,28 @@ def _command(content: str, iso: dict, argv: list, project: str = "") -> Verdict:
                                         "and was not found on PATH")
         cmd[0] = resolved
         try:
-            with private_dir() as cwd:
-                r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                                   errors="replace", timeout=float(iso.get("timeout", 60)),
-                                   cwd=cwd)
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=float(iso.get("timeout", 60)), cwd=cwd)
         except (OSError, subprocess.SubprocessError, ValueError) as e:
             return Verdict(UNAVAILABLE, f"{type(e).__name__}: {e}")
-        if r.returncode == 0:
-            return Verdict(PASS)
-        out = (r.stdout + r.stderr).strip()
-        if r.returncode == 1:
-            return Verdict(REFUSED, out or "refused by the isolation command")
-        return Verdict(UNAVAILABLE, f"isolation command exited {r.returncode}: {out[:500]}")
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    if r.returncode == 0:
+        return Verdict(PASS)
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode == 1:
+        return Verdict(REFUSED, out or "refused by the isolation command")
+    return Verdict(UNAVAILABLE, f"isolation command exited {r.returncode}: {out[:500]}")
 
 
 def check(content: str, namespace: str, cfg) -> Verdict:
     """Run every configured check; the first refusal or failure decides."""
     iso = cfg["isolation"]
     checks = iso.get("checks", [])
-    project = str(cfg.project_file.parent) if getattr(cfg, "project_file", None) else ""
+    # `{project}` names a repository's own files, which may run only once
+    # that repository's config is trusted (section 4); an untrusted one
+    # leaves it unset, and a command using it is `unavailable`, so held.
+    project = (str(cfg.project_file.parent)
+               if getattr(cfg, "project_file", None) and getattr(cfg, "project_trusted", False)
+               else "")
     try:
         if "builtin-secrets" in checks:
             hits = _secrets(content)

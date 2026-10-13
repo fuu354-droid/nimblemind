@@ -37,9 +37,10 @@ def spawn(transcript_path: str, session_id: str, cwd: str, harness_name: str = "
     # hook runs in the session's repository, and `-m` there would import a
     # `nimblemind/` (or any stdlib name) the repository planted.
     argv = [sys.executable, "-P", "-m", "nimblemind", "distill",
-            "--transcript", os.path.abspath(transcript_path), "--session-id", session_id, "--cwd", cwd]
+            f"--transcript={os.path.abspath(transcript_path)}", f"--session-id={session_id}",
+            f"--cwd={cwd}"]
     if harness_name:
-        argv += ["--harness", harness_name]
+        argv.append(f"--harness={harness_name}")
     kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
                     "stderr": subprocess.DEVNULL, "close_fds": True, "cwd": run_dir()}
     if sys.platform == "win32":

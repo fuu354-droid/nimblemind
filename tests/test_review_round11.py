@@ -30,6 +30,7 @@ def test_f11_1_project_placeholder_names_the_project(cfg, user_config, tmp_path)
     (proj / "scripts" / "check.py").write_text(
         "import sys\nsys.exit(1 if 'zebra' in open(sys.argv[1]).read() else 0)\n", encoding="utf-8")
     (proj / ".nimblemind.toml").write_text("", encoding="utf-8")
+    config_mod.trust(proj / ".nimblemind.toml")  # {project} needs a trusted project (F12-1)
     user_config(f'[isolation]\nchecks = ["command"]\n'
                 f'command = {toml_list([sys.executable, "{project}/scripts/check.py", "{file}"])}\n')
     c = config_mod.load(proj)

@@ -93,4 +93,4 @@ def test_f4_5_spawn_puts_the_harness_on_the_child_command(monkeypatch):
     seen = []
     monkeypatch.setattr(distill.subprocess, "Popen", lambda argv, **kw: seen.append(argv))
     distill.spawn("/t.jsonl", "s", "/cwd", "generic")
-    assert seen[0][-2:] == ["--harness", "generic"]
+    assert seen[0][-1] == "--harness=generic"

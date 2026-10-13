@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 from nimblemind import __version__, approval
+from nimblemind.fsutil import logical_cwd
 from nimblemind import config as config_mod
 
 
@@ -44,7 +45,7 @@ def confirm(question: str) -> str:
 
 def _cfg(args) -> config_mod.Config:
     # A relative --cwd means relative to where the command runs.
-    cfg = config_mod.load(_abs(getattr(args, "cwd", None) or Path.cwd()))
+    cfg = config_mod.load(_abs(getattr(args, "cwd", None) or logical_cwd()))
     if getattr(args, "namespace", None):
         cfg.data["namespace"] = args.namespace
     for note in cfg.notes:
@@ -98,7 +99,7 @@ def cmd_hook(args) -> int:
         # decides the config; if that config names another harness, the
         # payload is read again with it.
         try:
-            name = args.harness or config_mod.load(_abs(Path.cwd()))["harness"]
+            name = args.harness or config_mod.load(_abs(logical_cwd()))["harness"]
         except config_mod.ConfigError:
             # The process directory's config is only a first guess; a broken
             # one there must not silence a payload naming a valid project.
@@ -141,7 +142,7 @@ def cmd_distill(args) -> int:
     from nimblemind import distill
 
     # The project config always applies: from --cwd, else this directory.
-    cfg = config_mod.load(_abs(args.cwd or Path.cwd()))
+    cfg = config_mod.load(_abs(args.cwd or logical_cwd()))
     if args.harness:
         cfg.data["harness"] = args.harness
     try:
@@ -348,7 +349,7 @@ def cmd_trust(args) -> int:
     if path is None:
         from nimblemind.paths import find_project_config
 
-        path = find_project_config(Path.cwd())
+        path = find_project_config(logical_cwd())
     if not path or not path.is_file():
         raise SystemExit("no project config found")
     if args.revoke:

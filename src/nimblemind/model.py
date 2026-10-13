@@ -15,6 +15,7 @@ and do not distill or recall recursively.
 from __future__ import annotations
 
 import json
+import re
 import os
 import subprocess
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 from nimblemind.fsutil import private_dir, which
 
 CHILD_ENV = "NIMBLEMIND_CHILD"
+_SAFE_ARG = re.compile(r"^[A-Za-z0-9._:-]{1,100}$")
 
 
 class ModelError(RuntimeError):
@@ -48,11 +50,18 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
         exe = which("claude")
         if not exe:
             raise ModelError("the `claude` CLI is not on PATH; install it or set command = \"argv\"")
-        argv = [exe, "-p", "--model", spec.get("model") or "haiku",
-                "--append-system-prompt", system, "--output-format", "json"]
+        model_name = spec.get("model") or "haiku"
+        if not _SAFE_ARG.match(model_name):
+            raise ModelError(f"model name {model_name!r} has characters a command line cannot carry safely")
+        # Only fixed, safe tokens go on the command line. The instructions
+        # travel on stdin with the transcript: on Windows an npm-installed
+        # `claude` is a .cmd shim run through cmd.exe, whose quoting no
+        # argv escaping survives, and the instructions carry text a project
+        # config may set.
+        argv = [exe, "-p", "--model", model_name, "--output-format", "json"]
         if tools:
             argv += ["--allowedTools", ",".join(tools)]
-        stdin = user
+        stdin = system + "\n\n" + user
     elif command == "argv":
         argv = [a.replace("{model}", spec.get("model", "")) for a in spec.get("argv") or []]
         if not argv:
