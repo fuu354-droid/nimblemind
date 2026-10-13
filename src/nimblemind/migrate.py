@@ -65,7 +65,7 @@ def run(cfg, source: Path, kind: str, *, dry_run: bool = False) -> list[str]:
             continue
         if dry_run:
             verdict = isolation.Verdict(isolation.REFUSED) if marked \
-                else isolation.check(content, cfg.namespace, cfg)
+                else writes._scan(content, cfg.namespace, cfg)
             if not verdict.ok:
                 word = "hold"
             elif cfg["approval"].get("cli") == "deny":

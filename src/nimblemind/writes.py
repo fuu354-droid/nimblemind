@@ -24,7 +24,7 @@ from nimblemind import approval, isolation, paths
 from nimblemind import backends as backends_mod
 from nimblemind.backends.local import LocalBackend
 from nimblemind.config import APPROVAL_PATHS
-from nimblemind.fsutil import append_line, atomic_write, file_lock, list_json, read_text
+from nimblemind.fsutil import append_line, atomic_write, file_lock, list_json, path_kind, read_text
 from nimblemind.records import Record, now_iso, sha256
 
 STORED, PENDING, HELD, REJECTED = "stored", "pending", "held", "rejected"
@@ -89,9 +89,17 @@ def _store(cfg, rec: Record) -> str:
         idx.store(rec)
         return ""
     except Exception as e:
+        sent_error = f"{type(e).__name__}: {e}"
+    try:
         _mark_unsynced(cfg, rec.source_id, rec.namespace)
-        return (f"stored locally; backend send failed ({type(e).__name__}: {e}), "
-                "`nimblemind flush` retries it")
+    except Exception as e:
+        # Still must not escape: the approval has yet to be logged. Say so
+        # instead, so the person can repair the retry list and resend.
+        return (f"stored locally; backend send failed ({sent_error}) and the retry list "
+                f"could not be updated ({type(e).__name__}: {e}); repair it, then "
+                "`nimblemind flush`")
+    return (f"stored locally; backend send failed ({sent_error}), "
+            "`nimblemind flush` retries it")
 
 
 def _unsynced_file(cfg, namespace: str) -> Path:
@@ -359,8 +367,10 @@ def flush(cfg, namespace: str = "") -> tuple[int, int]:
     namespace = namespace or cfg.namespace
     f = _unsynced_file(cfg, namespace)
     if cfg["backend"].get("name", "local") == "local":
-        f.unlink(missing_ok=True)
-        return 0, 0
+        # The retry list belongs to the data home, not to whichever backend
+        # this directory's config names: with nothing to send to, it is
+        # left exactly as it is for a later flush under the real backend.
+        return 0, len(_read_unsynced(f))
     try:
         idx = index_backend(cfg)
     except Exception as e:
@@ -372,6 +382,10 @@ def flush(cfg, namespace: str = "") -> tuple[int, int]:
         for sid in ids:
             rec = local.get(sid, namespace)
             if rec is None:
+                # Gone (deleted since): drop it. Present but unreadable:
+                # keep it, so it is retried once it can be read again.
+                if path_kind(local._file(namespace, sid)) is not None:
+                    left.append(sid)
                 continue
             try:
                 idx.store(rec)
