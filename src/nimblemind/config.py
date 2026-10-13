@@ -384,6 +384,10 @@ def load(cwd: Path | str | None = None) -> Config:
             if dropped:
                 notes.append(f"{project_file}: not trusted, ignored {', '.join(dropped)} "
                               f"(run `nimblemind trust {project_file}`)")
+        tables = [k for k, v in project.items()
+                  if isinstance(DEFAULTS.get(k), dict) and not isinstance(v, dict)]
+        if tables:
+            raise ConfigError(f"{project_file}: {', '.join(tables)} must be a table")
         narrowing = {k: project.pop(k) for k in NARROWING if k in project}
         bad = [k for k, v in narrowing.items() if not isinstance(v, dict)]
         if bad:

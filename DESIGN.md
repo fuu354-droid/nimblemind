@@ -269,7 +269,11 @@ Nothing else in the package calls `Backend.store`.
   driving a shell has no terminal, so it can queue writes but cannot approve
   its own.
 - `pending approve` shows each entry (path, kind, source id, hash, content)
-  before asking, and stores exactly what was shown. It refuses an entry that
+  before asking, and stores exactly what was shown. Every text the CLI
+  prints shows control characters, DEL, C1 controls and Unicode
+  bidirectional overrides as visible `\uXXXX` escapes, so content cannot
+  rewrite the terminal to hide part of itself; `--json` output carries the
+  exact text. It refuses an entry that
   does not match its anchor in `pending.jsonl` (namespace and hash, written
   when it was queued, outside the entry file), one whose hash differs from
   the one shown, one whose path is now `deny`, and one that no longer passes

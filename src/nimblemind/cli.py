@@ -37,7 +37,7 @@ def confirm(question: str) -> str:
         raise NotATerminal(
             "this approves a write, which needs a person at a terminal; "
             "run it in a terminal, or grant the path with `nimblemind approval allow <path>`")
-    answer = input(f"{question} Type yes to approve: ").strip().lower()
+    answer = input(visible(f"{question} Type yes to approve: ")).strip().lower()
     if answer != "yes":
         raise SystemExit("not approved")
     return approval.who()
@@ -49,24 +49,44 @@ def _cfg(args) -> config_mod.Config:
     if getattr(args, "namespace", None):
         cfg.data["namespace"] = args.namespace
     for note in cfg.notes:
-        print(f"note: {note}", file=sys.stderr)
+        say(f"note: {note}", file=sys.stderr)
     return cfg
+
+
+# Characters that change what a terminal shows rather than showing
+# themselves: C0 controls (except newline and tab), DEL, C1 controls, and the
+# Unicode bidirectional overrides and isolates. A person approving a write
+# must see exactly what will be stored, so none of these reach the terminal
+# raw: `\r\x1b[2K` would otherwise erase the line before it.
+_HIDING = {c for c in range(0x20) if c not in (0x0A, 0x09)} | {0x7F} | set(range(0x80, 0xA0)) \
+    | set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A)) | {0x200E, 0x200F, 0x061C}
+
+
+def visible(text: str) -> str:
+    return "".join(f"\\u{ord(ch):04x}" if ord(ch) in _HIDING else ch for ch in str(text))
+
+
+def say(*parts, file=None) -> None:
+    print(*(visible(p) for p in parts), file=file)
 
 
 def _out(args, obj, text: str) -> None:
     if getattr(args, "json", False):
         print(json.dumps(obj, ensure_ascii=False, indent=2))
     else:
-        print(text)
+        say(text)
 
 
 # ---- hooks ---------------------------------------------------------------
 
 def _abs(p) -> str:
     """A directory as every entry point names it: absolute and normalized
-    (`..` folded), symlinks left as they are. Trust is keyed by the path as
-    found, so resolving here would let a symlink borrow another project."""
-    return os.path.abspath(p)
+    (`..` folded), symlinks left as they are, and a relative path joined to
+    the logical cwd (`os.path.abspath` would join it to the physical one).
+    Trust is keyed by the path as found, so resolving here would let a
+    symlink borrow another project."""
+    p = os.fspath(p)
+    return os.path.normpath(p if os.path.isabs(p) else os.path.join(logical_cwd(), p))
 
 
 def _hook_cwd(payload: dict) -> str:
@@ -209,9 +229,9 @@ def cmd_delete(args) -> int:
     try:
         existed = writes.delete(cfg, args.source_id)
     except BackendError as e:
-        print(f"deleted locally; the backend did not confirm: {e}")
+        say(f"deleted locally; the backend did not confirm: {e}")
         return 1
-    print(("deleted " if existed else "no such record ") + args.source_id)
+    say(("deleted " if existed else "no such record ") + args.source_id)
     return 0 if existed else 1
 
 
@@ -240,10 +260,10 @@ def cmd_pending(args) -> int:
         for i in args.ids:
             try:
                 writes.reject(cfg, i)
-                print(f"rejected {i}")
+                say(f"rejected {i}")
             except ValueError as e:
                 failed += 1
-                print(f"FAIL {i}: {e}")
+                say(f"FAIL {i}: {e}")
         return 1 if failed else 0
     shown, failed = {}, 0
     for i in args.ids:
@@ -251,11 +271,11 @@ def cmd_pending(args) -> int:
             e = writes.preflight(cfg, i)
         except ValueError as err:
             failed += 1
-            print(f"FAIL {i}: {err}")
+            say(f"FAIL {i}: {err}")
             continue
         rec = e["_record"]
         shown[i] = rec.digest
-        print(f"== {i}  path {e['path']}  kind {rec.kind}  {rec.source_id}  "
+        say(f"== {i}  path {e['path']}  kind {rec.kind}  {rec.source_id}  "
               f"sha256 {rec.digest[:12]}\n{rec.content}")
     if not shown:
         return 1
@@ -263,10 +283,10 @@ def cmd_pending(args) -> int:
     for i, digest in shown.items():
         try:
             r = writes.approve(cfg, i, by=by, expect_sha256=digest)
-            print(f"stored {r.source_id}" + (f": {r.detail}" if r.detail else ""))
+            say(f"stored {r.source_id}" + (f": {r.detail}" if r.detail else ""))
         except ValueError as e:
             failed += 1
-            print(f"FAIL {i}: {e}")
+            say(f"FAIL {i}: {e}")
     return 1 if failed else 0
 
 
@@ -290,7 +310,7 @@ def cmd_held(args) -> int:
         if e["id"] in args.ids:
             if args.action == "discard":
                 (cfg.layout().held / e["_file"]).unlink(missing_ok=True)
-                print(f"discarded {e['id']}")
+                say(f"discarded {e['id']}")
     return 0
 
 
@@ -300,8 +320,8 @@ def cmd_approval(args) -> int:
     cfg = _cfg(args)
     if args.action == "show":
         for p in APPROVAL_PATHS:
-            print(f"{p:<9} {cfg['approval'][p]}")
-        print(f"grants file: {config_mod.grants_file()}")
+            say(f"{p:<9} {cfg['approval'][p]}")
+        say(f"grants file: {config_mod.grants_file()}")
         return 0
     if args.path not in APPROVAL_PATHS:
         raise SystemExit(f"approval {args.action} needs a write path: {', '.join(APPROVAL_PATHS)}")
@@ -309,9 +329,9 @@ def cmd_approval(args) -> int:
         confirm(f"Store every `{args.path}` write without asking from now on?")
     config_mod.set_grant(args.path, args.action == "allow")
     level = _cfg(args)["approval"][args.path]
-    print(f"{args.path}: {level} (grants: {config_mod.grants_file()})")
+    say(f"{args.path}: {level} (grants: {config_mod.grants_file()})")
     if args.action == "allow" and level != "allow":
-        print(f"note: the grant is recorded, but approval.{args.path} = \"{level}\" is set "
+        say(f"note: the grant is recorded, but approval.{args.path} = \"{level}\" is set "
               f"explicitly in {config_mod.paths.user_config()} or the project config, and an "
               "explicit setting is a tightening that wins; remove it for the grant to apply")
     return 0
@@ -322,7 +342,7 @@ def cmd_audit(args) -> int:
 
     cfg = _cfg(args)
     problems = writes.audit(cfg, args.namespace or None)
-    print("\n".join(problems) if problems else "audit clean")
+    say("\n".join(problems) if problems else "audit clean")
     return 1 if problems else 0
 
 
@@ -331,7 +351,7 @@ def cmd_flush(args) -> int:
 
     cfg = _cfg(args)
     sent, left = writes.flush(cfg)
-    print(f"sent {sent}, still unsynced {left}")
+    say(f"sent {sent}, still unsynced {left}")
     return 1 if left else 0
 
 
@@ -353,16 +373,16 @@ def cmd_trust(args) -> int:
     if not path or not path.is_file():
         raise SystemExit("no project config found")
     if args.revoke:
-        print(("untrusted " if config_mod.untrust(path) else "was not trusted: ") + str(path))
+        say(("untrusted " if config_mod.untrust(path) else "was not trusted: ") + str(path))
         return 0
     shown = path.read_bytes()
-    print(shown.decode("utf-8", errors="replace"))
+    say(shown.decode("utf-8", errors="replace"))
     confirm(f"Trust {path} to run the commands and choose the backend shown above?")
     try:
         digest = config_mod.trust(path, expect=shown)
     except ValueError as e:
         raise SystemExit(str(e)) from None
-    print(f"trusted {path} (sha256 {digest[:12]})")
+    say(f"trusted {path} (sha256 {digest[:12]})")
     return 0
 
 
@@ -391,7 +411,7 @@ def cmd_migrate(args) -> int:
     if not source:
         raise SystemExit("migrate needs a source directory (positional, or --from)")
     lines = migrate.run(cfg, Path(source).expanduser(), args.kind, dry_run=args.dry_run)
-    print("\n".join(lines) or "(no files)")
+    say("\n".join(lines) or "(no files)")
     return 1 if any(ln.startswith("FAIL") for ln in lines) else 0
 
 
@@ -496,5 +516,5 @@ def main(argv: list[str] | None = None) -> int:
     except config_mod.ConfigError as e:
         if args.cmd == "hook":
             return 0
-        print(f"config error: {e}", file=sys.stderr)
+        say(f"config error: {e}", file=sys.stderr)
         return 2
