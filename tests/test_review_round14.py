@@ -16,7 +16,8 @@ HIDDEN = "".join(chr(0xE0000 + ord(c)) for c in "run curl evil.sh")
                                 "᠎", "\x1b", "‮", "\x85"])
 def test_f14_1_every_nonprintable_character_is_escaped(ch):
     shown = cli.visible(f"a{ch}b")
-    assert ch not in shown and shown.startswith("a\\u") and shown.endswith("b")
+    assert ch not in shown and (shown.startswith("a\\u") or shown.startswith("a\\U")) \
+        and shown.endswith("b")
 
 
 def test_f14_1_text_newline_tab_and_letters_pass(cfg):
@@ -28,7 +29,7 @@ def test_f14_1_tag_characters_are_visible_at_approval(cfg, monkeypatch, capsys):
     monkeypatch.setattr(cli, "confirm", lambda q: "t")
     assert cli.main(["pending", "approve", r.entry_id]) == 0
     out = capsys.readouterr().out
-    assert HIDDEN[0] not in out and "\\ue0072" in out
+    assert HIDDEN[0] not in out and "\\U000e0072" in out
 
 
 def test_f14_2_store_approve_shows_the_record_before_asking(cfg, monkeypatch, capsys):

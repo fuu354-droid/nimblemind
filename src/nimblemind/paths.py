@@ -40,8 +40,7 @@ def data_home() -> Path:
 
 def _configured_home() -> Path | None:
     try:
-        with open(user_config(), "rb") as f:
-            raw = tomllib.load(f).get("home")
+        raw = tomllib.loads(user_config().read_bytes().decode("utf-8-sig")).get("home")
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
         return None
     return Path(raw).expanduser() if isinstance(raw, str) and raw.strip() else None

@@ -9,7 +9,8 @@ from nimblemind import cli, config as config_mod, writes
                                 0x17B4, 0xFFA0, 0x180B, 0x2064])
 def test_f15_1_default_ignorable_characters_are_escaped(cp):
     shown = cli.visible(f"a{chr(cp)}b")
-    assert chr(cp) not in shown and f"\\u{cp:04x}" in shown
+    want = f"\\u{cp:04x}" if cp <= 0xFFFF else f"\\U{cp:08x}"
+    assert chr(cp) not in shown and want in shown
 
 
 def test_f15_1_hidden_variation_selector_message_is_visible(cfg, capsys):

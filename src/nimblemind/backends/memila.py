@@ -38,12 +38,32 @@ def _env_file() -> dict[str, str]:
     return {k.strip(): v.strip() for k, v in pairs}
 
 
+_LOCAL = {"127.0.0.1", "::1"}
+
+
 def _addresses(host: str) -> set[str]:
+    """Every address `host` reaches, in one canonical spelling: an
+    IPv4-mapped IPv6 address becomes its IPv4 address, and an unspecified
+    address (0.0.0.0, ::), which connects to this machine, stands for the
+    loopback addresses."""
+    out: set[str] = set()
     try:
-        return {ipaddress.ip_address(info[4][0]).compressed
-                for info in socket.getaddrinfo(host, None)}
-    except (OSError, ValueError):
-        return set()
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return out
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%", 1)[0])
+        except ValueError:
+            continue
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if ip.is_unspecified:
+            out |= _LOCAL
+        out.add(ip.compressed)
+        if ip.is_loopback:
+            out |= _LOCAL if ip.version == 4 or ip.compressed == "::1" else set()
+    return out
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

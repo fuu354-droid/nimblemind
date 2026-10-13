@@ -62,7 +62,12 @@ def _cfg(args) -> config_mod.Config:
 # hide part of it.
 def visible(text: str) -> str:
     return "".join(ch if ch in "\n\t" or (ch.isprintable() and not _ignorable(ord(ch)))
-                   else f"\\u{ord(ch):04x}" for ch in str(text))
+                   else _escape(ord(ch)) for ch in str(text))
+
+
+def _escape(cp: int) -> str:
+    # Fixed width, so an escape never runs into the text after it.
+    return f"\\u{cp:04x}" if cp <= 0xFFFF else f"\\U{cp:08x}"
 
 
 # Unicode's Default_Ignorable_Code_Point: characters a terminal draws as

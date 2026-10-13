@@ -40,7 +40,8 @@ class Record:
     def __post_init__(self):
         if self.kind not in KINDS:
             raise ValueError(f"unknown record kind {self.kind!r}; expected one of {KINDS}")
-        if not self.source_id or "/" in self.source_id or "\\" in self.source_id:
+        if (not self.source_id or "/" in self.source_id or "\\" in self.source_id
+                or any(not c.isprintable() for c in self.source_id)):
             raise ValueError(f"unusable source_id {self.source_id!r}")
 
     @property

@@ -109,8 +109,8 @@ class Config:
 
 def _load_toml(path: Path) -> dict:
     try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
+        # utf-8-sig: a byte order mark (older Windows editors) is not an error.
+        return tomllib.loads(path.read_bytes().decode("utf-8-sig"))
     except FileNotFoundError:
         return {}
     except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError) as e:
@@ -246,6 +246,9 @@ def _validate(data: dict) -> None:
     if not isinstance(ident, dict) or not all(
             isinstance(v, list) and all(isinstance(x, str) for x in v) for v in ident.values()):
         raise ConfigError("isolation.identity must map each namespace to a list of strings")
+    t = data["isolation"].get("timeout")
+    if isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0:
+        raise ConfigError("isolation.timeout must be a positive number")
     known = {"builtin-secrets", "builtin-patterns", "command"}
     for c in data["isolation"]["checks"]:
         if c not in known:
@@ -267,9 +270,23 @@ def grants_file() -> Path:
     return paths.data_home() / "approval.toml"
 
 
+def _bound_config() -> str:
+    """The user config a grant is bound to: its absolute path as resolved
+    now. A grant stands only while the same user config is the one read,
+    because the tightenings it defers to (an explicit ask or deny, deny
+    patterns, identity strings) live there; pointing NIMBLEMIND_CONFIG or
+    XDG_CONFIG_HOME elsewhere must not keep the grant while dropping them."""
+    return os.path.abspath(paths.user_config())
+
+
 def grants() -> set[str]:
-    raw = _load_toml_quiet(grants_file()).get("allow", [])
-    return {p for p in raw if p in APPROVAL_PATHS} if isinstance(raw, list) else set()
+    """Paths with a standing grant that applies right now: granted, and bound
+    to the user config currently in effect."""
+    data = _load_toml_quiet(grants_file())
+    raw = data.get("allow", [])
+    if not isinstance(raw, list) or data.get("user_config") != _bound_config():
+        return set()
+    return {p for p in raw if p in APPROVAL_PATHS}
 
 
 def set_grant(path: str, allowed: bool) -> set[str]:
@@ -277,9 +294,12 @@ def set_grant(path: str, allowed: bool) -> set[str]:
         raise ConfigError(f"unknown write path {path!r}; expected one of {APPROVAL_PATHS}")
     current = grants()
     current = current | {path} if allowed else current - {path}
+    bound = json.dumps(_bound_config())  # a TOML basic string is a JSON string
     body = ("# Written by `nimblemind approval`. Each path listed here stores\n"
-            "# its writes without asking. Edit only through that command.\n"
-            f"allow = [{', '.join(repr(p).replace(chr(39), chr(34)) for p in sorted(current))}]\n")
+            "# its writes without asking, while user_config below is the user\n"
+            "# config in effect. Edit only through that command.\n"
+            f"user_config = {bound}\n"
+            f"allow = [{', '.join(json.dumps(p) for p in sorted(current))}]\n")
     atomic_write(grants_file(), body)
     return current
 
@@ -383,7 +403,10 @@ def load(cwd: Path | str | None = None) -> Config:
     # value sits above the project config (section 4's precedence).
     data = _merge(data, _env_layer(DEFAULTS, NARROWING))
 
-    project_file = paths.find_project_config(cwd)
+    try:
+        project_file = paths.find_project_config(cwd)
+    except OSError as e:
+        raise ConfigError(f"cannot search for a project config from {cwd}: {e}") from None
     trusted = False
     project_lowered_total = False
     if project_file:
@@ -394,7 +417,7 @@ def load(cwd: Path | str | None = None) -> Config:
         except OSError as e:
             raise ConfigError(f"{project_file}: {e}") from None
         try:
-            project = tomllib.loads(raw.decode("utf-8"))
+            project = tomllib.loads(raw.decode("utf-8-sig"))
         except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
             raise ConfigError(f"{project_file}: {e}") from None
         trusted = (not project_file.is_symlink()
@@ -437,8 +460,7 @@ def load(cwd: Path | str | None = None) -> Config:
                                      or iso["timeout"] <= 0):
                 raise ConfigError(f"{project_file}: isolation.timeout must be a positive number")
             if isinstance(iso.get("timeout"), (int, float)) and iso["timeout"] > 0:
-                data["isolation"]["timeout"] = min(data["isolation"]["timeout"], iso["timeout"]) \
-                    if data["isolation"].get("timeout") else iso["timeout"]
+                data["isolation"]["timeout"] = min(data["isolation"]["timeout"], iso["timeout"])
 
     data = _merge(data, _env_layer(DEFAULTS, tuple(k for k in DEFAULTS if k not in NARROWING)))
     # A project may lower total_chars alone; the parts it bounds follow it
