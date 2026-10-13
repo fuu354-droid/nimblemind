@@ -81,17 +81,34 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
 
 
+def _entry(entry: str) -> tuple[str, int | None]:
+    """A forbidden_endpoints entry as (host, port); port None means every
+    port. Forms: "host:port", ":port", "[v6]:port", "host", "[v6]"."""
+    entry = entry.strip()
+    if entry.startswith("[") and entry.endswith("]"):
+        return entry[1:-1], None
+    head, sep, tail = entry.rpartition(":")
+    if sep and tail.isdigit() and (head.startswith("[") or ":" not in head):
+        return head.strip("[]"), int(tail)
+    return entry.strip("[]"), None
+
+
 def is_forbidden(url: str, forbidden: list[str]) -> bool:
-    parts = urllib.parse.urlsplit(url)
+    """Whether `url` would reach a forbidden endpoint. Anything that cannot
+    be shown to be allowed counts as forbidden: a port that does not parse,
+    and any percent-encoding in the host part, which urllib decodes before
+    connecting while the comparison here would not."""
     try:
+        parts = urllib.parse.urlsplit(url)
+        if "%" in parts.netloc.rpartition("@")[2]:
+            return True
         port = parts.port or (443 if parts.scheme == "https" else 80)
     except ValueError:
-        return True  # a port that does not parse cannot be shown to be allowed
+        return True
     host = parts.hostname or ""
     for entry in forbidden:
-        f_host, _, f_port = entry.rpartition(":")
-        f_host = f_host.strip("[]")  # "[::1]:6500" names the host ::1
-        if not f_port.isdigit() or int(f_port) != port:
+        f_host, f_port = _entry(entry)
+        if f_port is not None and f_port != port:
             continue
         if not f_host:
             return True

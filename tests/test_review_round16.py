@@ -33,7 +33,8 @@ def test_f16_1_a_grant_does_not_survive_a_different_user_config(cfg, user_config
 def test_f16_1_grant_records_the_user_config(tmp_path):
     config_mod.set_grant("distill", True)
     text = config_mod.grants_file().read_text(encoding="utf-8")
-    assert str(paths.user_config()) in text and '"distill"' in text
+    import os
+    assert os.fsencode(os.path.abspath(paths.user_config())).hex() in text and '"distill"' in text
 
 
 @pytest.mark.parametrize("spelling", ["0.0.0.0", "[::ffff:127.0.0.1]", "127.1"])

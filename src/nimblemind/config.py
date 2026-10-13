@@ -58,7 +58,7 @@ DEFAULTS: dict = {
                "prompt_chars": 3000, "recall_k": 3},
     "approval": {p: "ask" for p in APPROVAL_PATHS},
     "isolation": {"checks": ["builtin-secrets"], "deny": [], "identity": {},
-                  "command": [], "project_command": [], "timeout": 60},
+                  "command": [], "project_command": [], "timeout": 60.0},
     "curiosity": {"confidence_floor": 70, "gaps_file": "", "after_run": []},
 }
 
@@ -242,6 +242,10 @@ def _validate(data: dict) -> None:
     if not isinstance(data["namespace"], str) or not data["namespace"]:
         raise ConfigError("namespace: must be a non-empty string")
     paths.safe_name(data["namespace"])
+    for key in ("checks", "deny"):
+        v = data["isolation"].get(key)
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise ConfigError(f"isolation.{key} must be a list of strings")
     ident = data["isolation"].get("identity")
     if not isinstance(ident, dict) or not all(
             isinstance(v, list) and all(isinstance(x, str) for x in v) for v in ident.values()):
@@ -276,7 +280,10 @@ def _bound_config() -> str:
     because the tightenings it defers to (an explicit ask or deny, deny
     patterns, identity strings) live there; pointing NIMBLEMIND_CONFIG or
     XDG_CONFIG_HOME elsewhere must not keep the grant while dropping them."""
-    return os.path.abspath(paths.user_config())
+    # Stored as the hex of the path's file-system bytes: TOML cannot carry
+    # every path (lone surrogates from undecodable bytes, characters past
+    # U+FFFF as JSON escapes), and the comparison must not depend on it.
+    return os.fsencode(os.path.abspath(paths.user_config())).hex()
 
 
 def grants() -> set[str]:
@@ -294,13 +301,15 @@ def set_grant(path: str, allowed: bool) -> set[str]:
         raise ConfigError(f"unknown write path {path!r}; expected one of {APPROVAL_PATHS}")
     current = grants()
     current = current | {path} if allowed else current - {path}
-    bound = json.dumps(_bound_config())  # a TOML basic string is a JSON string
     body = ("# Written by `nimblemind approval`. Each path listed here stores\n"
-            "# its writes without asking, while user_config below is the user\n"
-            "# config in effect. Edit only through that command.\n"
-            f"user_config = {bound}\n"
+            "# its writes without asking, while the user config in effect is the\n"
+            "# one whose path bytes are user_config (hex). Edit only through\n"
+            "# that command.\n"
+            f'user_config = "{_bound_config()}"\n'
             f"allow = [{', '.join(json.dumps(p) for p in sorted(current))}]\n")
     atomic_write(grants_file(), body)
+    if grants() != current:
+        raise ConfigError(f"{grants_file()}: the grant was written but does not read back")
     return current
 
 
