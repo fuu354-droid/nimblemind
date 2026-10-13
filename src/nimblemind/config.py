@@ -205,8 +205,10 @@ def _narrow(user: dict, project: dict) -> dict:
     for key in ("checks", "deny"):
         if key in iso and not (isinstance(iso[key], list) and all(isinstance(x, str) for x in iso[key])):
             raise ConfigError(f"project isolation.{key} must be a list of strings")
-    if "identity" in iso and not isinstance(iso["identity"], dict):
-        raise ConfigError("project isolation.identity must be a table")
+    if "identity" in iso and not (isinstance(iso["identity"], dict) and all(
+            isinstance(v, list) and all(isinstance(x, str) for x in v)
+            for v in iso["identity"].values())):
+        raise ConfigError("project isolation.identity must map each namespace to a list of strings")
     checks = iso.get("checks")
     if isinstance(checks, list):
         out["isolation"]["checks"] = list(dict.fromkeys([*out["isolation"]["checks"], *checks]))
