@@ -39,6 +39,12 @@ def test_f4_3_journal_with_empty_recall_sections_adds_nothing(cfg, user_config):
     out = recall.older(c, "session:new", 3)
     assert not any("decisions ONLY" in o for o in out)
     assert any("plain unfinished note" in o for o in out)
+
+
+def test_f4_3_zero_limit_returns_nothing(cfg):
+    c = cfg()
+    writes.write(c, "cli", "note", "unfinished thing", source_id="note:1", approved_by="t")
+    assert len(recall.older(c, "", 1)) == 1
     assert recall.older(c, "", 0) == []
 
 
@@ -81,3 +87,10 @@ def test_f4_7_migrate_accepts_from(tmp_path, capsys):
     (src / "a.md").write_text("x", encoding="utf-8")
     assert cli.main(["migrate", "--from", str(src), "--dry-run"]) == 0
     assert "would import a.md" in capsys.readouterr().out
+
+
+def test_f4_5_spawn_puts_the_harness_on_the_child_command(monkeypatch):
+    seen = []
+    monkeypatch.setattr(distill.subprocess, "Popen", lambda argv, **kw: seen.append(argv))
+    distill.spawn("/t.jsonl", "s", "/cwd", "generic")
+    assert seen[0][-2:] == ["--harness", "generic"]
