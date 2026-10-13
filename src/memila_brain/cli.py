@@ -5,12 +5,13 @@ never print an error into the session: a failing memory tool must not turn
 into a failing session. Every other command reports plainly and exits
 non-zero on failure.
 
-Commands that approve a write (`pending approve`, `store --approve`,
-`migrate`) require a person at a terminal: they read a typed confirmation
+Commands that approve a write or widen what is approved (`pending approve`,
+`store --approve`, `migrate`, `approval allow`, `trust`) require a person at
+a terminal: they read a typed confirmation
 from an interactive stdin and refuse without one. An agent driving a shell
 has no terminal, so it can queue writes but cannot approve its own. The
-scripted alternative is an `allow` rule in the user's own config, which a
-project config cannot set (DESIGN.md section 4).
+scripted alternative is a standing grant from `approval allow`, which lives
+in the data home (DESIGN.md section 7).
 """
 
 from __future__ import annotations
@@ -62,8 +63,8 @@ def cmd_hook(args) -> int:
     from memila_brain import distill, harness, model, recall
 
     try:
-        raw = "" if sys.stdin.isatty() else sys.stdin.read()
-    except OSError:
+        raw = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
+    except Exception:  # closed, binary or broken stdin: no payload, still exit 0
         raw = ""
     try:
         if model.is_child():
@@ -193,7 +194,8 @@ def cmd_pending(args) -> int:
             continue
         rec = e["_record"]
         shown[i] = rec.digest
-        print(f"== {i}  {e['path']}  {rec.source_id}  sha256 {rec.digest[:12]}\n{rec.content}")
+        print(f"== {i}  path {e['path']}  kind {rec.kind}  {rec.source_id}  "
+              f"sha256 {rec.digest[:12]}\n{rec.content}")
     if not shown:
         return 1
     by = confirm(f"Approve the {len(shown)} write(s) shown above into namespace {cfg.namespace!r}?")
@@ -222,8 +224,27 @@ def cmd_held(args) -> int:
             if args.action == "show":
                 print(f"== {e['id']} ({e['verdict']}: {e['report']})\n{e['record']['content']}")
             elif args.action == "discard":
-                (cfg.layout().held / f"{e['id']}.json").unlink(missing_ok=True)
+                (cfg.layout().held / e["_file"]).unlink(missing_ok=True)
                 print(f"discarded {e['id']}")
+    return 0
+
+
+def cmd_approval(args) -> int:
+    from memila_brain.config import APPROVAL_PATHS
+
+    cfg = _cfg(args)
+    if args.action == "show":
+        for p in APPROVAL_PATHS:
+            print(f"{p:<9} {cfg['approval'][p]}")
+        print(f"grants file: {config_mod.grants_file()}")
+        return 0
+    if args.path not in APPROVAL_PATHS:
+        raise SystemExit(f"approval {args.action} needs a write path: {', '.join(APPROVAL_PATHS)}")
+    if args.action == "allow":
+        confirm(f"Store every `{args.path}` write without asking from now on?")
+    config_mod.set_grant(args.path, args.action == "allow")
+    print(f"{args.path}: {'allow' if args.action == 'allow' else 'ask'} "
+          f"({config_mod.grants_file()})")
     return 0
 
 
@@ -348,6 +369,13 @@ def build_parser() -> argparse.ArgumentParser:
     hd.add_argument("action", choices=["list", "show", "discard"])
     hd.add_argument("ids", nargs="*")
     hd.set_defaults(fn=cmd_held)
+
+    ap_ = sub.add_parser("approval", help="show or change which write paths store without asking")
+    ap_.add_argument("action", choices=["show", "allow", "revoke"])
+    ap_.add_argument("path", nargs="?")
+    ap_.add_argument("--cwd")
+    ap_.add_argument("--namespace")
+    ap_.set_defaults(fn=cmd_approval)
 
     common(sub.add_parser("audit", help="check stored records against the approval log"),
            json_flag=False).set_defaults(fn=cmd_audit)

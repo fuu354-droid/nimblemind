@@ -101,15 +101,15 @@ def test_f5_environment_cannot_grant_approval(cfg, monkeypatch):
     assert writes.write(c, "cli", "note", "x").state == writes.PENDING
 
 
-def test_f6_allow_is_attributed_to_the_user_config(cfg, user_config, tmp_path):
-    uc = user_config('[approval]\ncli = "allow"\n')
+def test_f6_allow_is_attributed_to_the_grants_file(cfg, tmp_path):
+    config_mod.set_grant("cli", True)
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / ".memila-brain.toml").write_text("[journal]\nmax_words = 100\n", encoding="utf-8")
     c = config_mod.load(proj)
     writes.write(c, "cli", "note", "x")
     line = json.loads(c.layout().approvals.read_text(encoding="utf-8").splitlines()[-1])
-    assert line["approved_by"] == f"config:{uc}#approval.cli" and line["rule"] == "allow"
+    assert line["approved_by"] == f"grant:{config_mod.grants_file()}#cli" and line["rule"] == "allow"
 
 
 def test_f7_trust_refuses_a_file_swapped_after_it_was_shown(tmp_path):

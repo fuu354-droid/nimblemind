@@ -90,10 +90,9 @@ class Config:
         return self.data[key]
 
     def approval_source(self, path: str) -> str:
-        """Where the level for `path` came from, for the approval log. An
-        `allow` can only come from the user's own config: the environment
-        never sets approval and a project can only narrow."""
-        return f"config:{paths.user_config()}#approval.{path}"
+        """Where an `allow` for `path` came from, for the approval log: only
+        ever the grants file (see `grants_file`)."""
+        return f"grant:{grants_file()}#{path}"
 
     @property
     def namespace(self) -> str:
@@ -184,7 +183,7 @@ def _narrow(user: dict, project: dict) -> dict:
         if p in out["approval"] and level in APPROVAL_LEVELS:
             out["approval"][p] = _stricter_level(out["approval"][p], level)
     for k, v in (project.get("budget") or {}).items():
-        if k in out["budget"] and isinstance(v, int) and not isinstance(v, bool):
+        if k in out["budget"] and isinstance(v, int) and not isinstance(v, bool) and v >= 0:
             out["budget"][k] = min(out["budget"][k], v)
     iso = project.get("isolation") or {}
     checks = iso.get("checks")
@@ -224,6 +223,45 @@ def _validate(data: dict) -> None:
     for c in data["isolation"]["checks"]:
         if c not in known:
             raise ConfigError(f"isolation.checks: unknown check {c!r}; expected one of {sorted(known)}")
+
+
+# ---- approval grants -----------------------------------------------------
+#
+# An `allow` lives only in <data home>/approval.toml, written by
+# `memila-brain approval allow <path>` at a terminal. Not in the user config:
+# the user config's location is chosen by environment variables
+# (MEMILA_BRAIN_CONFIG, XDG_CONFIG_HOME, HOME) that an agent can set on its
+# own command line, so an `allow` read from there is an approval the agent can
+# grant itself. The grants file sits in the data home instead, so moving it
+# also moves the store: an agent that points the data home elsewhere only
+# approves writes into a store no real session reads.
+
+def grants_file() -> Path:
+    return paths.data_home() / "approval.toml"
+
+
+def grants() -> set[str]:
+    raw = _load_toml_quiet(grants_file()).get("allow", [])
+    return {p for p in raw if p in APPROVAL_PATHS} if isinstance(raw, list) else set()
+
+
+def set_grant(path: str, allowed: bool) -> set[str]:
+    if path not in APPROVAL_PATHS:
+        raise ConfigError(f"unknown write path {path!r}; expected one of {APPROVAL_PATHS}")
+    current = grants()
+    current = current | {path} if allowed else current - {path}
+    body = ("# Written by `memila-brain approval`. Each path listed here stores\n"
+            "# its writes without asking. Edit only through that command.\n"
+            f"allow = [{', '.join(repr(p).replace(chr(39), chr(34)) for p in sorted(current))}]\n")
+    atomic_write(grants_file(), body)
+    return current
+
+
+def _load_toml_quiet(path: Path) -> dict:
+    try:
+        return _load_toml(path)
+    except ConfigError:
+        return {}
 
 
 # ---- trust ---------------------------------------------------------------
@@ -279,7 +317,19 @@ def untrust(project_file: Path) -> bool:
 def load(cwd: Path | str | None = None) -> Config:
     """The effective config for a session working in `cwd`."""
     notes: list[str] = []
-    data = _merge(DEFAULTS, _load_toml(paths.user_config()))
+    user = _load_toml(paths.user_config())
+    user_approval = user.pop("approval", None) or {}
+    data = _merge(DEFAULTS, user)
+    # The user config can tighten approval (ask, deny) but not grant it.
+    for p, level in (user_approval.items() if isinstance(user_approval, dict) else []):
+        if level == "allow":
+            notes.append(f"{paths.user_config()}: approval.{p} = \"allow\" ignored; "
+                         f"grant it with `memila-brain approval allow {p}`")
+            continue
+        data["approval"][p] = level
+    for p in grants():
+        if data["approval"].get(p) == "ask":
+            data["approval"][p] = "allow"
     # The narrowing sections' environment values act at the user's level, so
     # a project can still only narrow them; every other key's environment
     # value sits above the project config (section 4's precedence).
@@ -288,8 +338,17 @@ def load(cwd: Path | str | None = None) -> Config:
     project_file = paths.find_project_config(cwd)
     trusted = False
     if project_file:
-        project = _load_toml(project_file)
-        trusted = is_trusted(project_file)
+        # Read once: the bytes that are hashed for trust are the bytes that
+        # are parsed, so a file swapped between the two cannot be trusted.
+        try:
+            raw = project_file.read_bytes()
+        except OSError as e:
+            raise ConfigError(f"{project_file}: {e}") from None
+        try:
+            project = tomllib.loads(raw.decode("utf-8"))
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+            raise ConfigError(f"{project_file}: {e}") from None
+        trusted = _trusted().get(str(project_file.resolve())) == hashlib.sha256(raw).hexdigest()
         if not trusted:
             dropped = [k for k in TRUST_REQUIRED if _strip(project, k)]
             if dropped:

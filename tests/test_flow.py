@@ -47,14 +47,14 @@ def test_distill_queues_a_valid_journal(tmp_path, user_config, fake_model, cfg):
 
 
 def test_distill_allow_rule_stores_and_recall_shows_it(tmp_path, user_config, fake_model, cfg):
-    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(journal_text()))}\n'
-                '[approval]\ndistill = "allow"\n')
+    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(journal_text()))}\n')
+    config_mod.set_grant("distill", True)
     c = cfg()
     assert distill.distill(c, str(transcript(tmp_path)), "s1") == "stored"
     out = recall.assemble(c)
     assert "resume the hook wiring" in out and out.startswith("[memila-brain default]")
     log = (c.layout().approvals).read_text(encoding="utf-8")
-    assert '"rule": "allow"' in log and "approval.distill" in log
+    assert '"rule": "allow"' in log and "approval.toml#distill" in log
 
 
 def test_distill_skips_short_sessions(tmp_path, user_config, fake_model, cfg):

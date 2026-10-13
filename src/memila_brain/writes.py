@@ -130,8 +130,16 @@ def _anchored(cfg, entry_id: str) -> dict | None:
         except ValueError:
             continue
         if isinstance(e, dict) and e.get("id") == entry_id:
-            found = e
+            # A consumed anchor ends the entry: it cannot be replayed under
+            # the same id after it was approved or rejected.
+            found = None if e.get("consumed") else e
     return found
+
+
+def _consume(cfg, entry_id: str) -> None:
+    f = _anchor_file(cfg)
+    append_line(f, json.dumps({"id": entry_id, "consumed": True, "at": now_iso()}),
+                lock=f.with_suffix(".lock"))
 
 
 def _commit(cfg, rec: Record, *, path: str, by: str, rule: str) -> str:
@@ -210,6 +218,7 @@ def _entries(directory: Path) -> list[dict]:
         except (OSError, ValueError):
             continue
         if isinstance(e, dict) and "record" in e:
+            e["_file"] = f.name
             out.append(e)
     return out
 
@@ -264,6 +273,7 @@ def approve(cfg, entry_id: str, *, namespace: str = "", by: str = "",
     f = _entry_file(cfg.layout(namespace).pending, entry_id)
     by = by or approval.who()
     detail = _commit(cfg, rec, path=path, by=by, rule="command")
+    _consume(cfg, entry_id)
     f.unlink(missing_ok=True)
     _log(cfg, f"ok {entry['path']} {rec.namespace} {rec.source_id} (approved by {by})")
     return WriteResult(STORED, rec.source_id, detail)
@@ -276,6 +286,7 @@ def reject(cfg, entry_id: str, *, namespace: str = "") -> None:
     if not f.exists():
         raise ValueError(f"no pending entry {entry_id}")
     f.unlink()
+    _consume(cfg, entry_id)
     _log(cfg, f"reject pending/{entry_id} by {approval.who()}")
 
 

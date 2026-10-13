@@ -5,6 +5,7 @@ import socket
 
 import pytest
 
+from memila_brain import config as config_mod
 from memila_brain import recall, writes
 from memila_brain.backends.local import LocalBackend
 from memila_brain.records import Record
@@ -90,8 +91,8 @@ def test_3_cross_namespace_identity_is_refused(cfg, user_config):
 def test_4_injection_never_exceeds_total_budget(cfg, user_config):
     for total, core, rec in [(6000, 3500, 2000), (800, 700, 300), (300, 250, 200)]:
         user_config(f"[budget]\ntotal_chars = {total}\ncore_chars = {core}\n"
-                    f"recall_chars = {rec}\nprompt_chars = {min(total, 100)}\n"
-                    '[approval]\ncli = "allow"\n')
+                    f"recall_chars = {rec}\nprompt_chars = {min(total, 100)}\n")
+        config_mod.set_grant("cli", True)
         c = cfg()
         for i in range(6):
             body = "\n".join(f"## {s}\n" + ("- item %d " % i) * 400
@@ -126,7 +127,8 @@ def test_5_nothing_written_under_dot_claude(cfg, fake_model, tmp_path, user_conf
 
 def test_4_recall_is_dropped_before_core_is_cut(cfg, user_config):
     user_config("[budget]\ntotal_chars = 900\ncore_chars = 800\nrecall_chars = 800\n"
-                'prompt_chars = 100\n[approval]\ncli = "allow"\n')
+                'prompt_chars = 100\n')
+    config_mod.set_grant("cli", True)
     c = cfg()
     writes.write(c, "cli", "journal", "## Unfinished\n- older task " + "o" * 600,
                  source_id="session:1")
@@ -140,7 +142,8 @@ def test_4_recall_is_dropped_before_core_is_cut(cfg, user_config):
 
 def test_4_core_is_cut_to_fit_rather_than_dropping_everything(cfg, user_config):
     user_config("[budget]\ntotal_chars = 300\ncore_chars = 300\nrecall_chars = 100\n"
-                'prompt_chars = 100\n[approval]\ncli = "allow"\n')
+                'prompt_chars = 100\n')
+    config_mod.set_grant("cli", True)
     c = cfg()
     writes.write(c, "cli", "journal", "## Unfinished\n- keep this " + "x" * 2000,
                  source_id="session:1")

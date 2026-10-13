@@ -7,6 +7,7 @@ is an opaque string the caller chose.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
@@ -44,7 +45,14 @@ class Record:
 
     @property
     def digest(self) -> str:
-        return sha256(self.content)
+        """The hash an approval binds: every field, not the content alone, so
+        a record cannot change kind, identity, time or metadata between being
+        shown and being stored (a note approved as a note stays one)."""
+        canon = json.dumps({"source_id": self.source_id, "namespace": self.namespace,
+                            "kind": self.kind, "content": self.content,
+                            "metadata": self.metadata, "created_at": self.created_at},
+                           ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return sha256(canon)
 
     def to_dict(self) -> dict:
         return asdict(self)

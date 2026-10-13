@@ -56,7 +56,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
                                      f"redirect to {newurl} refused", headers, fp)
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+# No proxy from the environment either: a proxy variable would route the
+# request, and the API key, through a host the forbidden check never saw.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
 
 
 def is_forbidden(url: str, forbidden: list[str]) -> bool:
