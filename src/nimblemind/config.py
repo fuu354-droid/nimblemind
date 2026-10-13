@@ -58,7 +58,7 @@ DEFAULTS: dict = {
                "prompt_chars": 3000, "recall_k": 3},
     "approval": {p: "ask" for p in APPROVAL_PATHS},
     "isolation": {"checks": ["builtin-secrets"], "deny": [], "identity": {},
-                  "command": [], "timeout": 60},
+                  "command": [], "project_command": [], "timeout": 60},
     "curiosity": {"confidence_floor": 70, "gaps_file": "", "after_run": []},
 }
 
@@ -289,9 +289,17 @@ def _trusted() -> dict:
         return {}
 
 
+def _trust_key(project_file: Path) -> str:
+    """The path trust is recorded under: absolute, not resolved, so a file
+    reached through a symlink is not the file someone trusted."""
+    return str(Path(os.path.abspath(project_file)))
+
+
 def is_trusted(project_file: Path) -> bool:
+    if project_file.is_symlink():
+        return False
     try:
-        return _trusted().get(str(project_file.resolve())) == _digest(project_file)
+        return _trusted().get(_trust_key(project_file)) == _digest(project_file)
     except OSError:
         return False
 
@@ -300,7 +308,9 @@ def trust(project_file: Path, expect: bytes | None = None) -> str:
     """Trust `project_file`. With `expect`, the bytes the person was shown,
     the file must still hold exactly those bytes, and their hash is what is
     recorded: a file swapped while the prompt was open is refused."""
-    project_file = project_file.resolve()
+    if project_file.is_symlink():
+        raise ValueError(f"{project_file} is a symlink; trust the file it points to in its own project")
+    project_file = Path(_trust_key(project_file))
     digest = _digest(project_file)
     if expect is not None:
         shown = hashlib.sha256(expect).hexdigest()
@@ -314,7 +324,7 @@ def trust(project_file: Path, expect: bytes | None = None) -> str:
 
 def untrust(project_file: Path) -> bool:
     data = _trusted()
-    removed = data.pop(str(project_file.resolve()), None) is not None
+    removed = data.pop(_trust_key(project_file), None) is not None
     atomic_write(_trust_file(), json.dumps(data, indent=2, sort_keys=True) + "\n")
     return removed
 
@@ -363,7 +373,8 @@ def load(cwd: Path | str | None = None) -> Config:
             project = tomllib.loads(raw.decode("utf-8"))
         except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
             raise ConfigError(f"{project_file}: {e}") from None
-        trusted = _trusted().get(str(project_file.resolve())) == hashlib.sha256(raw).hexdigest()
+        trusted = (not project_file.is_symlink()
+                   and _trusted().get(_trust_key(project_file)) == hashlib.sha256(raw).hexdigest())
         if not trusted:
             dropped = [k for k in TRUST_REQUIRED if _strip(project, k)]
             if dropped:
@@ -378,12 +389,18 @@ def load(cwd: Path | str | None = None) -> Config:
         data = _merge(data, project)
         data = _narrow(data, narrowing)
         if trusted:
-            # A trusted file may also set the isolation command and timeout,
-            # which _narrow does not carry.
+            # A trusted file may add an isolation command. It runs in
+            # addition to the user's own, never instead of it: a project
+            # only ever makes isolation stricter (section 8, every check
+            # must pass).
             iso = narrowing.get("isolation") or {}
-            for k in ("command", "timeout"):
-                if k in iso:
-                    data["isolation"][k] = iso[k]
+            if iso.get("command"):
+                data["isolation"]["project_command"] = iso["command"]
+                if "command" not in data["isolation"]["checks"]:
+                    data["isolation"]["checks"].append("command")
+            if isinstance(iso.get("timeout"), (int, float)) and iso["timeout"] > 0:
+                data["isolation"]["timeout"] = min(data["isolation"]["timeout"], iso["timeout"]) \
+                    if data["isolation"].get("timeout") else iso["timeout"]
 
     data = _merge(data, _env_layer(DEFAULTS, tuple(k for k in DEFAULTS if k not in NARROWING)))
     # A project may lower total_chars alone; the parts it bounds follow it

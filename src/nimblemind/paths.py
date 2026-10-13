@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import tomllib
 from pathlib import Path
 
 APP = "nimblemind"
@@ -25,10 +26,28 @@ def _env_path(name: str) -> Path | None:
 
 
 def data_home() -> Path:
-    """The data home: records, pending and held writes, logs, locks."""
+    """The data home: records, pending and held writes, logs, locks.
+    Environment variable, then `home` in the user config, then the platform
+    default (DESIGN.md section 3)."""
     explicit = _env_path("NIMBLEMIND_HOME")
     if explicit:
         return explicit
+    configured = _configured_home()
+    if configured:
+        return configured
+    return default_data_home()
+
+
+def _configured_home() -> Path | None:
+    try:
+        with open(user_config(), "rb") as f:
+            raw = tomllib.load(f).get("home")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return Path(raw).expanduser() if isinstance(raw, str) and raw.strip() else None
+
+
+def default_data_home() -> Path:
     if sys.platform == "win32":
         base = _env_path("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
         return base / APP
@@ -47,7 +66,7 @@ def user_config() -> Path:
         base = _env_path("APPDATA") or Path.home() / "AppData" / "Roaming"
         return base / APP / "config.toml"
     if sys.platform == "darwin":
-        return data_home() / "config.toml"
+        return default_data_home() / "config.toml"
     base = _env_path("XDG_CONFIG_HOME") or Path.home() / ".config"
     return base / APP / "config.toml"
 

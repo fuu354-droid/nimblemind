@@ -64,6 +64,9 @@ default.
 | user config | `NIMBLEMIND_CONFIG` | Linux: `$XDG_CONFIG_HOME/nimblemind/config.toml` (`~/.config/...`); macOS: same directory as data home; Windows: `%APPDATA%\nimblemind\config.toml` |
 | project config | none | `.nimblemind.toml`, found by walking up from the session's working directory, stopping at the filesystem root |
 
+The data home also reads `home = "<path>"` from the user config, between
+the environment variable and the platform default.
+
 Data home layout:
 
 ```
@@ -111,7 +114,9 @@ not trusted the way the user's own file is:
   distiller and researcher, `isolation.command`, `curiosity.gaps_file` and
   `curiosity.after_run`) applies only once a person has trusted that exact
   file with `nimblemind trust`, at a terminal, which records the hash of
-  the bytes it showed. Loading reads the file once and checks that same
+  the bytes it showed, keyed by the file's absolute path as found (not
+  resolved). A `.nimblemind.toml` that is a symlink is never trusted, so one
+  repository cannot borrow another's trust or namespace. Loading reads the file once and checks that same
   read's hash, so an edit, a pulled change or a swap drops trust until it is
   given again. An untrusted file's other keys still apply, and the dropped ones are
   named on stderr.
@@ -145,11 +150,11 @@ core_chars = 3500
 recall_chars = 2000
 
 [approval]             # "ask" or "deny" only; see section 7 for "allow"
-distill = "ask"
-research = "ask"
-gap = "ask"
-provider = "ask"
-cli = "ask"
+# distill = "ask"      every path defaults to "ask"; naming a path here
+# research = "ask"     explicitly is a tightening that a standing grant
+# gap = "ask"          does not override, so leave a path out to let
+# provider = "ask"     `nimblemind approval allow` apply to it
+# cli = "ask"
 
 [isolation]
 checks = ["builtin-secrets"]
@@ -300,7 +305,8 @@ Nothing else in the package calls `Backend.store`.
   file, the argv runs with `{file}` substituted, exit 0 passes, exit 1 refuses
   with stdout as the report, anything else means the check could not run. This
   is how the origin workspace keeps its own `check_output.py` without the
-  package knowing its layout.
+  package knowing its layout. A trusted project's `command` runs in
+  addition to the user's, never instead of it.
 
 The same checks run on every path. A multi-client deployment runs them in
 the service on its write endpoint (`nimblemind serve`, section 10), not in

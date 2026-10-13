@@ -87,7 +87,8 @@ def test_trusted_isolation_command_applies(tmp_path):
     root, f = project(tmp_path, f'[isolation]\nchecks = ["command"]\ncommand = {toml_list(["x", "{file}"])}\n')
     config_mod.trust(f)
     c = config_mod.load(root)
-    assert c["isolation"]["command"] == ["x", "{file}"]
+    assert c["isolation"]["project_command"] == ["x", "{file}"]
+    assert c["isolation"]["command"] == []  # the user's own command is untouched
     assert "command" in c["isolation"]["checks"]
 
 

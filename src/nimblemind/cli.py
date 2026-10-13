@@ -68,7 +68,9 @@ def _hook_cwd(payload: dict) -> str:
     cwd = payload.get("cwd") or ""
     if not Path(cwd).is_absolute():
         raise ValueError(f"hook payload cwd is not an absolute path: {cwd!r}")
-    return cwd
+    # Resolved, as every CLI path resolves its directory, so the hook and
+    # the distill child it starts find the same project config.
+    return str(Path(cwd).resolve())
 
 
 def cmd_hook(args) -> int:
@@ -217,10 +219,15 @@ def cmd_pending(args) -> int:
             for e in items))
         return 0 if items else 1
     if args.action == "reject":
+        failed = 0
         for i in args.ids:
-            writes.reject(cfg, i)
-            print(f"rejected {i}")
-        return 0
+            try:
+                writes.reject(cfg, i)
+                print(f"rejected {i}")
+            except ValueError as e:
+                failed += 1
+                print(f"FAIL {i}: {e}")
+        return 1 if failed else 0
     shown, failed = {}, 0
     for i in args.ids:
         try:
@@ -284,8 +291,12 @@ def cmd_approval(args) -> int:
     if args.action == "allow":
         confirm(f"Store every `{args.path}` write without asking from now on?")
     config_mod.set_grant(args.path, args.action == "allow")
-    print(f"{args.path}: {'allow' if args.action == 'allow' else 'ask'} "
-          f"({config_mod.grants_file()})")
+    level = _cfg(args)["approval"][args.path]
+    print(f"{args.path}: {level} (grants: {config_mod.grants_file()})")
+    if args.action == "allow" and level != "allow":
+        print(f"note: the grant is recorded, but approval.{args.path} = \"{level}\" is set "
+              f"explicitly in {config_mod.paths.user_config()} or the project config, and an "
+              "explicit setting is a tightening that wins; remove it for the grant to apply")
     return 0
 
 

@@ -64,8 +64,7 @@ def _patterns(content: str, namespace: str, iso: dict) -> list[str]:
     return found
 
 
-def _command(content: str, iso: dict) -> Verdict:
-    argv = iso.get("command") or []
+def _command(content: str, iso: dict, argv: list) -> Verdict:
     if not argv:
         return Verdict(UNAVAILABLE, "isolation.checks names `command` but isolation.command is empty")
     fd, path = tempfile.mkstemp(prefix="nimblemind-scan-", suffix=".md")
@@ -109,5 +108,12 @@ def check(content: str, namespace: str, cfg) -> Verdict:
     except ValueError as e:
         return Verdict(UNAVAILABLE, str(e))
     if "command" in checks:
-        return _command(content, iso)
+        user_cmd, project_cmd = iso.get("command") or [], iso.get("project_command") or []
+        if not user_cmd and not project_cmd:
+            return Verdict(UNAVAILABLE, "isolation.checks names `command` but no command is set")
+        for argv in (user_cmd, project_cmd):
+            if argv:
+                v = _command(content, iso, argv)
+                if not v.ok:
+                    return v
     return Verdict(PASS)
