@@ -217,7 +217,9 @@ Backends:
   configured by `MEMILA_URL` and `MEMILA_API_KEY`, then `~/.config/memila.env`.
   `forbidden_endpoints` in its config refuses named hosts and ports before a
   socket opens (the origin workspace uses it to keep personal memory off a
-  company service).
+  company service). Addresses compare in one canonical spelling: an
+  IPv4-mapped address is its IPv4 address, and an unspecified address
+  (`0.0.0.0`, `::`) counts as this machine's loopback.
 - Third party: `name = "plugin"` with `target = "package.module:Class"` loads any
   class implementing the protocol. This is the inward provider direction.
 
@@ -262,9 +264,14 @@ Nothing else in the package calls `Backend.store`.
   agent can grant itself. The grants file sits in the data home, so with the
   `local` backend moving it moves the store with it, and an agent that
   points the data home elsewhere only approves writes into a store no real
-  session reads (a non-local backend: see the limits below). The user config
-  and a project config can set `ask` or `deny` (tightening); an `allow`
-  there is ignored and named on stderr.
+  session reads (a non-local backend: see the limits below). A grant is
+  also bound to the user config in effect when it was given (its path is
+  recorded beside it): the tightenings a grant defers to live in that
+  file, so when a different user config is read (another
+  `NIMBLEMIND_CONFIG` or `XDG_CONFIG_HOME`), no grant applies and writes
+  wait for approval. Moving the user config means granting again. The user
+  config and a project config can set `ask` or `deny` (tightening); an
+  `allow` there is ignored and named on stderr.
 - `nimblemind pending list|show <id>|approve <id>...|reject <id>...`.
 - Every command that approves or widens approval (`pending approve`,
   `store --approve`, `migrate`, `approval allow`, `trust`) reads a typed
