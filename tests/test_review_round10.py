@@ -73,3 +73,17 @@ def test_user_config_scalar_section_is_a_clean_error(user_config, capsys):
 def test_store_with_a_bad_source_id_is_a_clean_error(cfg):
     with pytest.raises(SystemExit, match="store: unusable source_id"):
         cli.main(["store", "--text", "x", "--source-id", "a/b"])
+
+
+def test_f10_1_isolation_command_runs_outside_the_project(cfg, user_config, tmp_path, monkeypatch):
+    from conftest import toml_list
+
+    out = tmp_path / "cwd.txt"
+    script = tmp_path / "where.py"
+    script.write_text(f"import os\nopen({str(out)!r}, 'w').write(os.getcwd())\n", encoding="utf-8")
+    user_config(f'[isolation]\nchecks = ["command"]\ncommand = {toml_list([sys.executable, str(script), "{file}"])}\n')
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    writes.write(config_mod.load(proj), "cli", "note", "x", approved_by="t")
+    assert os.path.realpath(out.read_text()) != os.path.realpath(proj)
