@@ -374,7 +374,11 @@ def cmd_flush(args) -> int:
     from nimblemind import writes
 
     cfg = _cfg(args)
-    sent, left = writes.flush(cfg)
+    try:
+        sent, left = writes.flush(cfg)
+    except ValueError as e:
+        say(f"error: {e}", file=sys.stderr)
+        return 1
     say(f"sent {sent}, still unsynced {left}")
     return 1 if left else 0
 

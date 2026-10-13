@@ -38,9 +38,11 @@ def record(log: Path, *, source_id: str, namespace: str, path: str, sha256: str,
 
 
 def entries(log: Path) -> list[dict]:
+    """The log's entries; [] when there is no log yet. Any other read error
+    is raised: an unreadable log is not an empty one."""
     try:
         text = read_text(log)
-    except OSError:
+    except FileNotFoundError:
         return []
     out = []
     # split on "\n" only: str.splitlines also breaks on U+2028 and U+0085,

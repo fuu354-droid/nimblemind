@@ -98,13 +98,25 @@ def _unsynced_file(cfg, namespace: str) -> Path:
     return cfg.layout(namespace).records.parent / "unsynced.json"
 
 
+def _read_unsynced(f: Path) -> list:
+    """The retry list; [] when there is none yet. An unreadable or corrupt
+    list is raised, never read as empty: rewriting it as [] would drop the
+    records it names from every later flush."""
+    try:
+        ids = json.loads(read_text(f))
+    except FileNotFoundError:
+        return []
+    except ValueError:
+        raise ValueError(f"{f} is not a readable retry list; fix or remove it") from None
+    if not isinstance(ids, list):
+        raise ValueError(f"{f} is not a readable retry list; fix or remove it")
+    return ids
+
+
 def _mark_unsynced(cfg, source_id: str, namespace: str) -> None:
     f = _unsynced_file(cfg, namespace)
     with file_lock(f.with_suffix(".lock")):
-        try:
-            ids = json.loads(read_text(f))
-        except (OSError, ValueError):
-            ids = []
+        ids = _read_unsynced(f)
         if source_id not in ids:
             ids.append(source_id)
         atomic_write(f, json.dumps(ids) + "\n")
@@ -354,10 +366,7 @@ def flush(cfg, namespace: str = "") -> tuple[int, int]:
     except Exception as e:
         raise backends_mod.BackendError(f"backend did not load: {type(e).__name__}: {e}") from None
     with file_lock(f.with_suffix(".lock")):
-        try:
-            ids = json.loads(read_text(f))
-        except (OSError, ValueError):
-            ids = []
+        ids = _read_unsynced(f)
         sent, left = 0, []
         local = canonical(cfg)
         for sid in ids:
@@ -377,7 +386,10 @@ def audit(cfg, namespace: str | None = None) -> list[str]:
     """Problems with stored records against the approval log; empty is
     clean. Every namespace on disk unless one is named (DESIGN.md section 7:
     every record file)."""
-    log = approval.latest(cfg.layout().approvals)
+    try:
+        log = approval.latest(cfg.layout().approvals)
+    except OSError as e:
+        return [f"{cfg.layout().approvals}: cannot be read: {e.strerror or e}"]
     local = canonical(cfg)
     if namespace:
         recs, problems = local.scan(namespace)

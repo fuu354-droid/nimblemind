@@ -185,12 +185,19 @@ def path_kind(path) -> str | None:
     return "other"
 
 
+def list_suffix(directory, suffix: str) -> list[Path]:
+    """The files directly in `directory` ending in `suffix`, sorted; [] when
+    the directory does not exist; raises when it exists but cannot be read
+    (see `list_json`)."""
+    if path_kind(directory) != "dir":
+        return []
+    with os.scandir(directory) as it:
+        return sorted(Path(e.path) for e in it if e.name.endswith(suffix))
+
+
 def list_json(directory) -> list[Path]:
     """The `*.json` files directly in `directory`, sorted; [] when the
     directory does not exist. Listed with `os.scandir`, which raises when a
     directory exists but cannot be read: `Path.glob` would return nothing
     there, and an unreadable records directory would read as an empty one."""
-    if path_kind(directory) != "dir":
-        return []
-    with os.scandir(directory) as it:
-        return sorted(Path(e.path) for e in it if e.name.endswith(".json"))
+    return list_suffix(directory, ".json")

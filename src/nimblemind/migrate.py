@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from nimblemind import approval, isolation, writes
-from nimblemind.fsutil import read_text
+from nimblemind.fsutil import list_suffix, path_kind, read_text
 from nimblemind.records import Record
 
 MARKS = (".quarantine.md", ".unscanned.md")
@@ -32,12 +32,16 @@ def _stem(name: str) -> tuple[str, str]:
 def run(cfg, source: Path, kind: str, *, dry_run: bool = False) -> list[str]:
     """One line per file; the caller prints them."""
     lines: list[str] = []
-    if not source.is_dir():
-        return [f"FAIL {source}: not a directory"]
+    try:
+        if path_kind(source) != "dir":
+            return [f"FAIL {source}: not a directory"]
+        files = list_suffix(source, ".md")
+    except OSError as e:
+        return [f"FAIL {source}: cannot be listed: {e.strerror or e}"]
     prefix = "session:" if kind == "journal" else "gap:" if kind == "answer" else f"{kind}:"
     local = writes.canonical(cfg)
     who = approval.who()
-    for f in sorted(source.glob("*.md")):
+    for f in files:
         stem, marked = _stem(f.name)
         if not stem:
             lines.append(f"skip {f.name}: no name left after its marks")
