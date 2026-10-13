@@ -61,8 +61,8 @@ Non-goals, ruled in the origin task:
 - File locking uses `fcntl` on POSIX and `msvcrt` on Windows behind one helper.
   File writes are atomic (write to a sibling temp file, then `os.replace`).
 - All text files are UTF-8, written with `newline="\n"`.
-- CI runs the full suite on ubuntu, macos and windows, on Python 3.12 and the
-  newest stable release.
+- CI runs the full suite on ubuntu, macos and windows, on Python 3.12, 3.13
+  and 3.14 (the newest stable release).
 
 ## 3. Locations
 

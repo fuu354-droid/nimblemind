@@ -28,6 +28,7 @@ from nimblemind.backends import BackendError
 from nimblemind.records import Evidence, Record
 
 DEFAULT_URL = "http://localhost:6452"
+MAX_TIMEOUT = 86400  # the same cap config.MAX_TIMEOUT puts on every other timeout
 ENV_FILE = Path.home() / ".config" / "memila.env"
 
 
@@ -202,8 +203,9 @@ class MemilaBackend:
             raise BackendError(f"backend url {url!r} must be http or https")
         timeout = spec.get("timeout", 30)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
-                or not math.isfinite(timeout) or timeout <= 0:
-            raise BackendError("backend.timeout must be a positive number")
+                or not math.isfinite(timeout) or not 0 < timeout <= MAX_TIMEOUT:
+            raise BackendError(f"backend.timeout must be a positive number of seconds, "
+                               f"at most {MAX_TIMEOUT}")
         forbidden = spec.get("forbidden_endpoints") or []
         if not isinstance(forbidden, list) or not all(isinstance(e, str) for e in forbidden):
             raise BackendError("backend.forbidden_endpoints must be a list of strings")
@@ -227,7 +229,7 @@ class MemilaBackend:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             raise BackendError(f"{method} {path}: HTTP {e.code} {e.reason}") from None
-        except (urllib.error.URLError, OSError, ValueError) as e:
+        except (urllib.error.URLError, OSError, ValueError, OverflowError) as e:
             raise BackendError(f"{method} {path}: {type(e).__name__}: {e}") from None
         try:
             return json.loads(raw) if raw.strip() else {}

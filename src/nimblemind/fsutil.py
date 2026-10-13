@@ -164,3 +164,22 @@ def is_absolute(path: str) -> bool:
         drive, _ = os.path.splitdrive(path)
         return bool(drive)
     return True
+
+
+def path_kind(path) -> str | None:
+    """"file", "dir", "other", or None when nothing is there. Any other
+    error (permission denied, I/O) is raised, never read as "absent":
+    from Python 3.14 `Path.is_file()` and `is_dir()` return False on every
+    OSError, which would turn an unreadable project config or records
+    directory into one that does not exist."""
+    import stat
+
+    try:
+        mode = os.stat(path).st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    if stat.S_ISREG(mode):
+        return "file"
+    if stat.S_ISDIR(mode):
+        return "dir"
+    return "other"

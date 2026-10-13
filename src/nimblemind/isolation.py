@@ -98,9 +98,10 @@ def _command(content: str, iso: dict, argv: list, project: str = "") -> Verdict:
             return Verdict(UNAVAILABLE, f"{type(e).__name__}: {e}")
     if r.returncode == 0:
         return Verdict(PASS)
-    out = (r.stdout + r.stderr).strip()
     if r.returncode == 1:
-        return Verdict(REFUSED, out or "refused by the isolation command")
+        # Section 8: stdout is the refusal's report (stderr only if it is empty).
+        return Verdict(REFUSED, r.stdout.strip() or r.stderr.strip() or "refused by the isolation command")
+    out = (r.stdout + r.stderr).strip()
     return Verdict(UNAVAILABLE, f"isolation command exited {r.returncode}: {out[:500]}")
 
 

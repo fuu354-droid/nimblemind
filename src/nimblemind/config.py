@@ -232,6 +232,9 @@ def _validate(data: dict) -> None:
         if level not in APPROVAL_LEVELS:
             raise ConfigError(f"approval.{p}: {level!r} is not one of {APPROVAL_LEVELS}")
     b = data["budget"]
+    unknown = set(b) - set(DEFAULTS["budget"])
+    if unknown:
+        raise ConfigError(f"budget has unknown keys: {', '.join(sorted(unknown))}")
     for k, v in b.items():
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:
             raise ConfigError(f"budget.{k}: must be a non-negative integer")

@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from nimblemind import paths
-from nimblemind.fsutil import atomic_write, file_lock, read_text
+from nimblemind.fsutil import atomic_write, file_lock, path_kind, read_text
 from nimblemind.records import Evidence, Record
 
 _WORD = re.compile(r"\w+", re.UNICODE)
@@ -101,14 +101,14 @@ class LocalBackend:
     def rebuild_index(self, namespace: str) -> dict:
         index = {"version": 1, "records": {}}
         d = self._dir(namespace)
-        if d.is_dir():
+        if path_kind(d) == "dir":
             for f in d.glob("*.json"):
                 if f.name == "index.json":
                     continue
                 rec = self._read_record(f)
                 if rec is not None and rec.namespace == namespace:
                     index["records"][rec.source_id] = self._entry(rec, f)
-        if d.is_dir():
+        if path_kind(d) == "dir":
             self._write_index(namespace, index)
         return index
 
@@ -180,7 +180,7 @@ class LocalBackend:
         What `audit` reads, so a record the index lost is still checked."""
         d = self._dir(namespace)
         recs, bad = [], []
-        if d.is_dir():
+        if path_kind(d) == "dir":
             for f in sorted(d.glob("*.json")):
                 if f.name == "index.json":
                     continue
@@ -200,11 +200,11 @@ class LocalBackend:
         source id map to; anything else is reported."""
         root = self.home / "namespaces"
         recs, bad = [], []
-        if not root.is_dir():
+        if path_kind(root) != "dir":
             return recs, bad
-        for ns_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        for ns_dir in sorted(p for p in root.iterdir() if path_kind(p) == "dir"):
             d = ns_dir / "records"
-            if not d.is_dir():
+            if path_kind(d) != "dir":
                 continue
             for f in sorted(d.glob("*.json")):
                 if f.name == "index.json":

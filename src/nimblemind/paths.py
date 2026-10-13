@@ -12,6 +12,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+from nimblemind.fsutil import path_kind
+
 APP = "nimblemind"
 PROJECT_CONFIG = ".nimblemind.toml"
 # Longest escaped namespace kept verbatim in a path component. Short enough
@@ -83,7 +85,7 @@ def find_project_config(start: Path | str | None) -> Path | None:
         return None
     for d in (start, *start.parents):
         candidate = d / PROJECT_CONFIG
-        if candidate.is_file():
+        if path_kind(candidate) == "file":
             return candidate
     return None
 
