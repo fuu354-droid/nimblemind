@@ -84,3 +84,20 @@ def test_f9_5_data_home_from_the_user_config(tmp_path, user_config, monkeypatch)
 def test_pending_reject_unknown_id_is_a_clean_failure(cfg, capsys):
     assert cli.main(["pending", "reject", "nope"]) == 1
     assert "FAIL nope" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_f9_3_hook_loads_config_from_the_resolved_cwd(tmp_path, monkeypatch):
+    g, f = tmp_path / "G", tmp_path / "F"
+    g.mkdir()
+    f.mkdir()
+    os.symlink(f, g / "link")
+    seen = []
+    real_load = config_mod.load
+    monkeypatch.setattr(config_mod, "load", lambda cwd=None: seen.append(cwd) or real_load(cwd))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": str(g / "link")})))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    assert cli.main(["hook", "session-start"]) == 0
+    assert str(f.resolve()) in [str(c) for c in seen]
+    assert str(g / "link") not in [str(c) for c in seen]
