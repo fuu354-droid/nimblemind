@@ -77,6 +77,8 @@ Data home layout:
     gaps.jsonl          the gap queue, unless a project config points elsewhere
     answers/
   approvals.jsonl       append-only approval log (section 7)
+  approval.toml         standing `allow` grants (section 7)
+  pending.jsonl         anchors for queued writes (section 7)
   trusted-projects.json project configs a person trusted, by content hash
   logs/                 write.log, distill.log, hook.log
   locks/
@@ -94,6 +96,9 @@ TOML, read with the standard library's `tomllib`, so a person can comment a
 hand-written config and no third-party parser is needed.
 Precedence, lowest first: built-in defaults, user config, project config,
 environment variables (`MEMILA_BRAIN_<SECTION>_<KEY>`, for scalar keys only).
+Environment values for the narrowing sections apply at the user's level, so
+a project still narrows them, and `approval` is never read from the
+environment.
 A project config arrives with whatever repository a person cloned, so it is
 not trusted the way the user's own file is:
 
@@ -105,9 +110,10 @@ not trusted the way the user's own file is:
   which memory pool a session reads (`namespace`, `harness`, `backend`, the
   distiller and researcher, `isolation.command`, `curiosity.gaps_file` and
   `curiosity.after_run`) applies only once a person has trusted that exact
-  file with `memila-brain trust`, at a terminal. Trust is recorded by
-  content hash, so an edit or a pulled change drops it until it is given
-  again. An untrusted file's other keys still apply, and the dropped ones are
+  file with `memila-brain trust`, at a terminal, which records the hash of
+  the bytes it showed. Loading reads the file once and checks that same
+  read's hash, so an edit, a pulled change or a swap drops trust until it is
+  given again. An untrusted file's other keys still apply, and the dropped ones are
   named on stderr.
 
 ```toml
@@ -138,7 +144,7 @@ total_chars = 6000
 core_chars = 3500
 recall_chars = 2000
 
-[approval]
+[approval]             # "ask" or "deny" only; see section 7 for "allow"
 distill = "ask"
 research = "ask"
 gap = "ask"
@@ -211,8 +217,8 @@ Nothing else in the package calls `Backend.store`.
    `held/` as unscanned, logged `gate unavailable`. Fail-open applies to the
    session (a hook never blocks start or end), never to the write.
 2. Approval (section 7). `deny`: rejected and logged. `ask`: the content goes
-   to `pending/` with its hash, logged `pending`. `allow`: an approval entry
-   is written naming the config rule, then step 3.
+   to `pending/`, its hash anchored in `pending.jsonl`, logged `pending`.
+   `allow`: step 3, then an approval entry naming the grant.
 3. Storage: the canonical local copy, then the configured backend when it
    is not `local`. A failure of that second send leaves the record stored
    locally and listed for `memila-brain flush`.
@@ -221,27 +227,53 @@ Nothing else in the package calls `Backend.store`.
 
 ## 7. Write approval
 
-- Each write path has its own setting: `ask`, `allow` or `deny`. The default
-  for every path is `ask`. A background run is never treated as authorized by
-  being in the background; only a person's command or an explicit `allow`
-  rule for that exact path stores anything.
+- Each write path has a level: `ask`, `allow` or `deny`. The default for
+  every path is `ask`. A background run is never treated as authorized by
+  being in the background; only a person's command or a standing grant for
+  that exact path stores anything.
+- `allow` is a standing grant, and it lives only in `<home>/approval.toml`,
+  written by `memila-brain approval allow <path>` at a terminal
+  (`approval revoke` removes it, `approval show` lists the levels). It is not
+  read from the user config or the environment: their locations are chosen
+  by variables (`MEMILA_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, `HOME`) an agent can
+  set on its own command line, so an `allow` read from either is one the
+  agent can grant itself. The grants file sits in the data home, so moving it
+  moves the store with it, and an agent that points the data home elsewhere
+  only approves writes into a store no real session reads. The user config
+  and a project config can set `ask` or `deny` (tightening); an `allow`
+  there is ignored and named on stderr.
 - `memila-brain pending list|show <id>|approve <id>...|reject <id>...`.
-- Every command that approves (`pending approve`, `store --approve`,
-  `migrate`, `trust`) reads a typed `yes` from an interactive terminal and
-  refuses without one. An agent driving a shell has no terminal, so it can
-  queue writes but cannot approve its own; the scripted alternative is an
-  `allow` rule in the user's own config, which a project config cannot set.
-- Approving re-runs the isolation check (config may have changed since the
-  write was queued) and refuses a pending entry whose content no longer
-  matches the hash taken when it was queued.
+- Every command that approves or widens approval (`pending approve`,
+  `store --approve`, `migrate`, `approval allow`, `trust`) reads a typed
+  `yes` from an interactive terminal and refuses without one. An agent
+  driving a shell has no terminal, so it can queue writes but cannot approve
+  its own.
+- `pending approve` shows each entry (path, kind, source id, hash, content)
+  before asking, and stores exactly what was shown. It refuses an entry that
+  does not match its anchor in `pending.jsonl` (namespace and hash, written
+  when it was queued, outside the entry file), one whose hash differs from
+  the one shown, one whose path is now `deny`, and one that no longer passes
+  isolation. An approved or rejected entry's anchor is marked consumed, so
+  the entry cannot be replayed.
+- The hash an approval binds covers the whole record (source id, namespace,
+  kind, content, metadata, creation time), not the content alone: a note
+  approved as a note cannot be stored as a journal.
 - `approvals.jsonl` gets one line per stored record: `{source_id, namespace,
   path, sha256, approved_by, approved_at, rule}`. `approved_by` is the OS user
-  for a command, or `config:<file>#approval.<path>` for an allow rule.
-- `memila-brain audit` verifies every stored record against the log: a record
-  with no entry, or whose content hash differs from its entry, is reported and
+  for a command, or `grant:<home>/approval.toml#<path>` for a standing grant.
+  The line is written after the record is stored, so a crash between the two
+  leaves a record `audit` reports, never an approval for nothing.
+- `memila-brain audit` verifies every record file on disk (not the index)
+  against the log: a record with no entry, whose hash differs from its entry,
+  or a file that is not a readable record of its namespace, is reported and
   exits non-zero. That is what makes approval verifiable rather than asserted.
 - The approval sits after isolation on purpose: a person is never asked to
   approve something the gate would refuse anyway.
+- Limits, stated rather than implied: everything above defends against an
+  agent driving this CLI, not against a process running as the same user
+  that edits the data home's files directly, or that fabricates a terminal
+  (a pty wrapper). Those need operating system separation, which a
+  same-user tool cannot provide.
 
 ## 8. Isolation check
 

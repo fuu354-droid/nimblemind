@@ -13,8 +13,8 @@ approval.
   shapes, your own deny patterns, cross-namespace identity strings, or any
   command you name), then approval, then storage.
 - **You approve what it remembers.** Background writes wait in a pending
-  queue until you approve them at a terminal, or until you write an `allow`
-  rule for that write path in your own config. Every stored record is logged
+  queue until you approve them at a terminal, or until you grant that write
+  path standing approval with `memila-brain approval allow <path>`. Every stored record is logged
   with its content hash, and `memila-brain audit` checks the store against
   that log.
 - **One injection budget.** The label, the last journal, older recall and any
@@ -83,9 +83,6 @@ in [DESIGN.md](DESIGN.md#4-configuration). A small example:
 ```toml
 namespace = "work"
 
-[approval]
-distill = "allow"          # store distilled journals without asking
-
 [journal]
 language = "English"
 banned_chars = ["—"]
@@ -94,6 +91,15 @@ banned_chars = ["—"]
 checks = ["builtin-secrets", "builtin-patterns"]
 deny = ["(?i)project-codename"]
 ```
+
+To store distilled journals without asking each time (at a terminal):
+
+```
+memila-brain approval allow distill
+```
+
+That grant lives in the data home, not in the config file, so nothing that
+can only set environment variables or write a config file can grant it.
 
 A repository can carry a `.memila-brain.toml` at its root. It can only
 tighten approval, budget and isolation. Keys that run commands, choose the
