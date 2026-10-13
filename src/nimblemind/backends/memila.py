@@ -14,6 +14,7 @@ happens when the port could match.
 from __future__ import annotations
 
 import ipaddress
+import math
 import json
 import os
 import re
@@ -77,9 +78,22 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
                                      f"redirect to {newurl} refused", headers, fp)
 
 
-# No proxy from the environment either: a proxy variable would route the
-# request, and the API key, through a host the forbidden check never saw.
-_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+def _build_opener() -> urllib.request.OpenerDirector:
+    """HTTP and HTTPS only. `build_opener` would add the FTP, file and data
+    handlers too, so a non-HTTP URL would reach a port (or a file) the
+    forbidden check never saw. No proxy from the environment either: a proxy
+    variable would route the request, and the API key, through a host the
+    check never saw."""
+    opener = urllib.request.OpenerDirector()
+    for handler in (urllib.request.ProxyHandler({}), urllib.request.UnknownHandler(),
+                    urllib.request.HTTPHandler(), urllib.request.HTTPSHandler(),
+                    urllib.request.HTTPDefaultErrorHandler(), _NoRedirect(),
+                    urllib.request.HTTPErrorProcessor()):
+        opener.add_handler(handler)
+    return opener
+
+
+_OPENER = _build_opener()
 
 
 _HOSTNAME = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -118,8 +132,8 @@ def _entry(entry: str) -> tuple[str, int | None]:
             return host, int(rest[1:])
         raise ValueError(f"forbidden endpoint {entry!r}: bad port")
     if entry.count(":") > 1:
-        if _is_v6(entry):
-            return entry, None
+        # Bare IPv6 is ambiguous (`::1:6452` is an address, not ::1 port
+        # 6452), so IPv6 is always bracketed.
         raise ValueError(f"forbidden endpoint {entry!r}: write IPv6 as [addr] or [addr]:port")
     host, sep, port = entry.partition(":")
     if sep:
@@ -147,6 +161,8 @@ def is_forbidden(url: str, forbidden: list[str]) -> bool:
     connecting while the comparison here would not."""
     try:
         parts = urllib.parse.urlsplit(url)
+        if parts.scheme.lower() not in ("http", "https"):
+            return True  # only HTTP(S) is ever opened; anything else is refused
         if "%" in parts.netloc.rpartition("@")[2]:
             return True
         port = parts.port or (443 if parts.scheme == "https" else 80)
@@ -182,6 +198,12 @@ class MemilaBackend:
         env = _env_file()
         url = spec.get("url") or os.environ.get("MEMILA_URL") or env.get("MEMILA_URL") or DEFAULT_URL
         key = os.environ.get("MEMILA_API_KEY") or env.get("MEMILA_API_KEY") or ""
+        if urllib.parse.urlsplit(url).scheme.lower() not in ("http", "https"):
+            raise BackendError(f"backend url {url!r} must be http or https")
+        timeout = spec.get("timeout", 30)
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
+                or not math.isfinite(timeout) or timeout <= 0:
+            raise BackendError("backend.timeout must be a positive number")
         forbidden = spec.get("forbidden_endpoints") or []
         if not isinstance(forbidden, list) or not all(isinstance(e, str) for e in forbidden):
             raise BackendError("backend.forbidden_endpoints must be a list of strings")
@@ -190,7 +212,7 @@ class MemilaBackend:
                 _entry(e)
             except ValueError as err:
                 raise BackendError(f"backend.forbidden_endpoints: {err}") from None
-        return cls(url, key, float(spec.get("timeout", 30)), forbidden)
+        return cls(url, key, float(timeout), forbidden)
 
     def _call(self, path: str, body: dict, method: str = "POST", timeout: float | None = None):
         if is_forbidden(self.url, self.forbidden):
@@ -205,7 +227,7 @@ class MemilaBackend:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             raise BackendError(f"{method} {path}: HTTP {e.code} {e.reason}") from None
-        except (urllib.error.URLError, OSError) as e:
+        except (urllib.error.URLError, OSError, ValueError) as e:
             raise BackendError(f"{method} {path}: {type(e).__name__}: {e}") from None
         try:
             return json.loads(raw) if raw.strip() else {}

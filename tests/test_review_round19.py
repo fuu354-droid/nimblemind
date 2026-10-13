@@ -19,14 +19,14 @@ def load(entries):
                                  "localhost:+6452", "localhost:0x1934", "[::1]:x", "[::1]x",
                                  "*", "*.corp", "user@localhost:6452", "http:localhost",
                                  "local host", "localhost#x", "localhost:99999", "localhost:0",
-                                 " localhost", "[127.0.0.1]", "[::1"])
+                                 " localhost", "[127.0.0.1]", "[::1", "::1", "::1:6452"])
 def test_f19_1_malformed_entries_are_config_errors(bad):
     with pytest.raises(BackendError):
         load([bad])
 
 
 @pytest.mark.parametrize("good", ["localhost", "localhost:6452", ":6452", "127.0.0.1",
-                                  "127.0.0.1:6500", "[::1]", "[::1]:6500", "::1",
+                                  "127.0.0.1:6500", "[::1]", "[::1]:6500",
                                   "rag-api.internal", "rag-api.internal.:443"])
 def test_f19_1_wellformed_entries_load(good):
     assert load([good]).forbidden == [good]

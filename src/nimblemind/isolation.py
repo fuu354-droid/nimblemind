@@ -127,8 +127,11 @@ def check(content: str, namespace: str, cfg) -> Verdict:
         return Verdict(UNAVAILABLE, str(e))
     if "command" in checks:
         user_cmd, project_cmd = iso.get("command") or [], iso.get("project_command") or []
-        if not user_cmd and not project_cmd:
-            return Verdict(UNAVAILABLE, "isolation.checks names `command` but no command is set")
+        if not user_cmd and not iso.get("project_added_command"):
+            # The user asked for a command check and set none: that check
+            # cannot run, whatever a project adds beside it.
+            return Verdict(UNAVAILABLE, "isolation.checks names `command` but isolation.command "
+                                        "is empty")
         for argv in (user_cmd, project_cmd):
             if argv:
                 v = _command(content, iso, argv, project)

@@ -217,9 +217,11 @@ Backends:
   configured by `MEMILA_URL` and `MEMILA_API_KEY`, then `~/.config/memila.env`.
   `forbidden_endpoints` in its config refuses named hosts and ports before a
   socket opens (the origin workspace uses it to keep personal memory off a
-  company service). An entry is `host:port`, `:port` (any host), a bare
-  `host` (every port), `[v6]` or `[v6]:port`, where a host is an IP address
-  or a hostname of letters, digits, `-` and `.`, and a port is 1-65535;
+  company service). Only `http` and `https` URLs are accepted or opened.
+  An entry is `host:port`, `:port` (any host), a bare `host` (every port),
+  `[v6]` or `[v6]:port` (IPv6 always bracketed), where a host is an IPv4
+  address or a hostname of letters, digits, `-` and `.`, and a port is
+  1-65535;
   anything else (not a list of strings, a URL, spaces, a wildcard, a
   non-numeric port) is a config error; a URL whose host part carries any percent-encoding
   is refused, since urllib decodes it before connecting. Addresses compare

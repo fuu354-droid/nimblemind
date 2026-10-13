@@ -27,6 +27,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -250,9 +251,10 @@ def _validate(data: dict) -> None:
     if not isinstance(ident, dict) or not all(
             isinstance(v, list) and all(isinstance(x, str) for x in v) for v in ident.values()):
         raise ConfigError("isolation.identity must map each namespace to a list of strings")
-    t = data["isolation"].get("timeout")
-    if isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0:
-        raise ConfigError("isolation.timeout must be a positive number")
+    for section in ("isolation", "distiller", "researcher"):
+        t = data[section].get("timeout")
+        if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) or t <= 0:
+            raise ConfigError(f"{section}.timeout must be a positive number")
     known = {"builtin-secrets", "builtin-patterns", "command"}
     for c in data["isolation"]["checks"]:
         if c not in known:
@@ -464,8 +466,12 @@ def load(cwd: Path | str | None = None) -> Config:
                 data["isolation"]["project_command"] = iso["command"]
                 if "command" not in data["isolation"]["checks"]:
                     data["isolation"]["checks"].append("command")
+                    # The project, not the user, asked for a command check;
+                    # an empty user command is then simply absent.
+                    data["isolation"]["project_added_command"] = True
             if "timeout" in iso and (isinstance(iso["timeout"], bool)
                                      or not isinstance(iso["timeout"], (int, float))
+                                     or not math.isfinite(iso["timeout"])
                                      or iso["timeout"] <= 0):
                 raise ConfigError(f"{project_file}: isolation.timeout must be a positive number")
             if isinstance(iso.get("timeout"), (int, float)) and iso["timeout"] > 0:
