@@ -234,3 +234,11 @@ def test_migrate_imports_plain_and_holds_marked(tmp_path, cfg):
     assert writes.audit(c) == []
     assert all(ln.startswith(("skip", "held")) for ln in migrate.run(c, src, "journal"))
     assert (src / "20260901-1200-abcd1234.md").exists()  # source untouched
+
+
+def test_distill_hook_itself_refuses_inside_a_child(tmp_path, monkeypatch, cfg):
+    called = []
+    monkeypatch.setattr(distill, "spawn", lambda *a: called.append(a))
+    monkeypatch.setenv("MEMILA_BRAIN_CHILD", "1")
+    distill.hook(cfg(), {"transcript_path": str(transcript(tmp_path)), "session_id": "s"})
+    assert called == []

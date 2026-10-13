@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 from memila_brain import paths
@@ -44,6 +45,15 @@ def tokens(text: str) -> set[str]:
         else:
             out.add(w)
     return out
+
+
+def _when(iso: str) -> float:
+    """An ISO timestamp as a number, so second and microsecond precision
+    compare correctly; an unparseable one sorts oldest."""
+    try:
+        return datetime.fromisoformat(iso).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
 
 
 class LocalBackend:
@@ -141,8 +151,8 @@ class LocalBackend:
             overlap = len(q & set(entry.get("tokens", []))) if q else 0
             if q and overlap == 0:
                 continue
-            scored.append((overlap, entry.get("created_at", ""), sid))
-        scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+            scored.append((overlap, _when(entry.get("created_at", "")), sid))
+        scored.sort(reverse=True)
         out = []
         for overlap, _, sid in scored:
             rec = self.get(sid, namespace)
@@ -167,5 +177,5 @@ class LocalBackend:
     def list(self, namespace: str) -> list[Record]:
         index = self._read_index(namespace)["records"]
         recs = [r for sid in index if (r := self.get(sid, namespace)) is not None]
-        recs.sort(key=lambda r: r.created_at, reverse=True)
+        recs.sort(key=lambda r: (_when(r.created_at), r.source_id), reverse=True)
         return recs

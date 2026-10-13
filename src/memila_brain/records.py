@@ -17,6 +17,12 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def stamp() -> str:
+    """A record's creation time. Microseconds, because "the newest journal"
+    is decided by it and two writes inside one second are ordinary."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
 def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -28,7 +34,7 @@ class Record:
     kind: str
     content: str
     metadata: dict = field(default_factory=dict)
-    created_at: str = field(default_factory=now_iso)
+    created_at: str = field(default_factory=stamp)
 
     def __post_init__(self):
         if self.kind not in KINDS:
@@ -47,7 +53,7 @@ class Record:
     def from_dict(cls, d: dict) -> "Record":
         return cls(source_id=d["source_id"], namespace=d["namespace"], kind=d["kind"],
                    content=d["content"], metadata=dict(d.get("metadata") or {}),
-                   created_at=d.get("created_at") or now_iso())
+                   created_at=d.get("created_at") or stamp())
 
 
 @dataclass

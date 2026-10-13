@@ -123,3 +123,28 @@ def test_5_nothing_written_under_dot_claude(cfg, fake_model, tmp_path, user_conf
     assert not (home / ".claude").exists()
     for root, _, files in os.walk(home):
         assert ".claude" not in root
+
+
+def test_4_recall_is_dropped_before_core_is_cut(cfg, user_config):
+    user_config("[budget]\ntotal_chars = 900\ncore_chars = 800\nrecall_chars = 800\n"
+                'prompt_chars = 100\n[approval]\ncli = "allow"\n')
+    c = cfg()
+    writes.write(c, "cli", "journal", "## Unfinished\n- older task " + "o" * 600,
+                 source_id="session:1")
+    writes.write(c, "cli", "journal", "## Unfinished\n- newest task " + "n" * 600,
+                 source_id="session:2")
+    out = recall.assemble(c)
+    assert len(out) <= 900
+    assert "newest task" in out and "older task" not in out
+    assert "recall dropped to fit the total budget" in out
+
+
+def test_4_core_is_cut_to_fit_rather_than_dropping_everything(cfg, user_config):
+    user_config("[budget]\ntotal_chars = 300\ncore_chars = 300\nrecall_chars = 100\n"
+                'prompt_chars = 100\n[approval]\ncli = "allow"\n')
+    c = cfg()
+    writes.write(c, "cli", "journal", "## Unfinished\n- keep this " + "x" * 2000,
+                 source_id="session:1")
+    out = recall.assemble(c)
+    assert 0 < len(out) <= 300
+    assert "keep this" in out and "core memory cut" in out
