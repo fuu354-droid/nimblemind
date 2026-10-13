@@ -6,7 +6,8 @@ alias (never a dated build, so it follows whatever the alias points at).
 its answer: `argv = ["ollama", "run", "llama3"]`, a wrapper script, anything.
 `command = "none"` turns the step off.
 
-The child runs in the system temp directory, outside any project, with
+The child runs in a fresh private directory under the data home, outside
+any project and outside the shared system temp directory, with
 `NIMBLEMIND_CHILD=1` set, so a child Claude Code session's own hooks see it
 and do not distill or recall recursively.
 """
@@ -16,10 +17,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import tempfile
 from dataclasses import dataclass
 
-from nimblemind.fsutil import which
+from nimblemind.fsutil import private_dir, which
 
 CHILD_ENV = "NIMBLEMIND_CHILD"
 
@@ -42,7 +42,6 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
     command = spec.get("command", "claude-cli")
     timeout = float(spec.get("timeout", 300))
     env = dict(os.environ, **{CHILD_ENV: "1"})
-    cwd = tempfile.gettempdir()
     if command == "none":
         raise ModelError("model command is `none`")
     if command == "claude-cli":
@@ -58,15 +57,19 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
         argv = [a.replace("{model}", spec.get("model", "")) for a in spec.get("argv") or []]
         if not argv:
             raise ModelError('command = "argv" needs a non-empty argv list')
-        resolved = which(argv[0])
-        if resolved:
-            argv[0] = resolved
+        resolved = argv[0] if os.path.isabs(argv[0]) else which(argv[0])
+        if not resolved:
+            raise ModelError(f"model command {argv[0]!r} is not an absolute path and was not "
+                             "found on PATH")
+        argv[0] = resolved
         stdin = system + "\n\n" + user
     else:
         raise ModelError(f"unknown model command {command!r}; expected claude-cli, argv or none")
     try:
-        r = subprocess.run(argv, input=stdin, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout, env=env, cwd=cwd)
+        with private_dir() as cwd:
+            r = subprocess.run(argv, input=stdin, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=timeout, env=env,
+                               cwd=cwd)
     except subprocess.TimeoutExpired:
         raise ModelError(f"timed out after {timeout:.0f}s") from None
     except OSError as e:

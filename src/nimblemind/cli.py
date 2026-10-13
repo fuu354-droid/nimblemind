@@ -44,7 +44,7 @@ def confirm(question: str) -> str:
 
 def _cfg(args) -> config_mod.Config:
     # A relative --cwd means relative to where the command runs.
-    cfg = config_mod.load(Path(getattr(args, "cwd", None) or Path.cwd()).resolve())
+    cfg = config_mod.load(_abs(getattr(args, "cwd", None) or Path.cwd()))
     if getattr(args, "namespace", None):
         cfg.data["namespace"] = args.namespace
     for note in cfg.notes:
@@ -61,6 +61,13 @@ def _out(args, obj, text: str) -> None:
 
 # ---- hooks ---------------------------------------------------------------
 
+def _abs(p) -> str:
+    """A directory as every entry point names it: absolute and normalized
+    (`..` folded), symlinks left as they are. Trust is keyed by the path as
+    found, so resolving here would let a symlink borrow another project."""
+    return os.path.abspath(p)
+
+
 def _hook_cwd(payload: dict) -> str:
     """The payload's cwd, which must be absolute: a relative one would be
     resolved against this process rather than the session, so it is a failed
@@ -68,9 +75,10 @@ def _hook_cwd(payload: dict) -> str:
     cwd = payload.get("cwd") or ""
     if not Path(cwd).is_absolute():
         raise ValueError(f"hook payload cwd is not an absolute path: {cwd!r}")
-    # Resolved, as every CLI path resolves its directory, so the hook and
-    # the distill child it starts find the same project config.
-    return str(Path(cwd).resolve())
+    # Normalized but not resolved, exactly as every CLI path treats its
+    # directory, so the hook and the distill child find the same project
+    # config, and a symlinked directory is not another project's path.
+    return _abs(cwd)
 
 
 def cmd_hook(args) -> int:
@@ -89,7 +97,12 @@ def cmd_hook(args) -> int:
         # trusted project's own harness is found). The payload's cwd then
         # decides the config; if that config names another harness, the
         # payload is read again with it.
-        name = args.harness or config_mod.load(Path.cwd())["harness"]
+        try:
+            name = args.harness or config_mod.load(_abs(Path.cwd()))["harness"]
+        except config_mod.ConfigError:
+            # The process directory's config is only a first guess; a broken
+            # one there must not silence a payload naming a valid project.
+            name = config_mod.load(None)["harness"]
         h = harness.load(name)
         payload = h.read_payload(raw)
         cfg = config_mod.load(_hook_cwd(payload))
@@ -128,7 +141,7 @@ def cmd_distill(args) -> int:
     from nimblemind import distill
 
     # The project config always applies: from --cwd, else this directory.
-    cfg = config_mod.load(Path(args.cwd or Path.cwd()).resolve())
+    cfg = config_mod.load(_abs(args.cwd or Path.cwd()))
     if args.harness:
         cfg.data["harness"] = args.harness
     try:
@@ -324,13 +337,14 @@ def cmd_flush(args) -> int:
 # ---- config --------------------------------------------------------------
 
 def cmd_trust(args) -> int:
-    # Resolve the directory only: resolving the file would follow a symlinked
-    # .nimblemind.toml to another project's file and trust that instead.
+    # Normalized, never resolved: resolving would follow a symlink to another
+    # project's file or directory and trust that instead (trust is keyed by
+    # the path as found).
     path = None
     if args.path:
         given = Path(args.path)
-        path = given.resolve() / ".nimblemind.toml" if given.is_dir() \
-            else given.parent.resolve() / given.name
+        path = Path(_abs(given)) / ".nimblemind.toml" if given.is_dir() \
+            else Path(_abs(given))
     if path is None:
         from nimblemind.paths import find_project_config
 

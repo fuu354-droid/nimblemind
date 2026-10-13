@@ -87,7 +87,7 @@ def test_pending_reject_unknown_id_is_a_clean_failure(cfg, capsys):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-def test_f9_3_hook_loads_config_from_the_resolved_cwd(tmp_path, monkeypatch):
+def test_f9_3_hook_loads_config_from_the_normalized_unresolved_cwd(tmp_path, monkeypatch):
     g, f = tmp_path / "G", tmp_path / "F"
     g.mkdir()
     f.mkdir()
@@ -99,5 +99,7 @@ def test_f9_3_hook_loads_config_from_the_resolved_cwd(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": str(g / "link")})))
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     assert cli.main(["hook", "session-start"]) == 0
-    assert str(f.resolve()) in [str(c) for c in seen]
-    assert str(g / "link") not in [str(c) for c in seen]
+    # Round 11 (F11-2): normalized like every CLI path, never resolved, so
+    # the symlinked directory is not taken for the project it points to.
+    assert str(g / "link") in [str(c) for c in seen]
+    assert str(f.resolve()) not in [str(c) for c in seen]

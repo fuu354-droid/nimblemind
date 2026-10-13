@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-from nimblemind.fsutil import neutral_dir, which
+from nimblemind.fsutil import private_dir, which
 
 PASS, REFUSED, UNAVAILABLE = "pass", "refused", "unavailable"
 
@@ -66,7 +66,15 @@ def _patterns(content: str, namespace: str, iso: dict) -> list[str]:
     return found
 
 
-def _command(content: str, iso: dict, argv: list) -> Verdict:
+def _command(content: str, iso: dict, argv: list, project: str = "") -> Verdict:
+    """Run one isolation command. `{file}` is the content's temp file and
+    `{project}` the directory of the project config, so a project-relative
+    checker can be named without depending on where the child runs. The
+    executable must resolve to an absolute path; anything else is
+    `unavailable` and the write is held."""
+    if any("{project}" in a for a in argv) and not project:
+        return Verdict(UNAVAILABLE, "isolation command uses {project} but no project config applies")
+    argv = [a.replace("{project}", project) for a in argv]
     if not argv:
         return Verdict(UNAVAILABLE, "isolation.checks names `command` but isolation.command is empty")
     fd, path = tempfile.mkstemp(prefix="nimblemind-scan-", suffix=".md")
@@ -76,13 +84,16 @@ def _command(content: str, iso: dict, argv: list) -> Verdict:
         cmd = [a.replace("{file}", path) for a in argv]
         if not any("{file}" in a for a in argv):
             cmd.append(path)
-        resolved = which(cmd[0])
-        if resolved:
-            cmd[0] = resolved
+        resolved = cmd[0] if os.path.isabs(cmd[0]) else which(cmd[0])
+        if not resolved:
+            return Verdict(UNAVAILABLE, f"isolation command {cmd[0]!r} is not an absolute path "
+                                        "and was not found on PATH")
+        cmd[0] = resolved
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=float(iso.get("timeout", 60)),
-                               cwd=neutral_dir())
+            with private_dir() as cwd:
+                r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", timeout=float(iso.get("timeout", 60)),
+                                   cwd=cwd)
         except (OSError, subprocess.SubprocessError, ValueError) as e:
             return Verdict(UNAVAILABLE, f"{type(e).__name__}: {e}")
         if r.returncode == 0:
@@ -102,6 +113,7 @@ def check(content: str, namespace: str, cfg) -> Verdict:
     """Run every configured check; the first refusal or failure decides."""
     iso = cfg["isolation"]
     checks = iso.get("checks", [])
+    project = str(cfg.project_file.parent) if getattr(cfg, "project_file", None) else ""
     try:
         if "builtin-secrets" in checks:
             hits = _secrets(content)
@@ -119,7 +131,7 @@ def check(content: str, namespace: str, cfg) -> Verdict:
             return Verdict(UNAVAILABLE, "isolation.checks names `command` but no command is set")
         for argv in (user_cmd, project_cmd):
             if argv:
-                v = _command(content, iso, argv)
+                v = _command(content, iso, argv, project)
                 if not v.ok:
                     return v
     return Verdict(PASS)

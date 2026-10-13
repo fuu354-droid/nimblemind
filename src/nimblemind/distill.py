@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from nimblemind import harness as harness_mod
 from nimblemind import journal, model, writes
-from nimblemind.fsutil import append_line, neutral_dir
+from nimblemind.fsutil import append_line, run_dir
 from nimblemind.records import now_iso
 
 MAX_TRANSCRIPT_CHARS = 60000
@@ -37,11 +37,11 @@ def spawn(transcript_path: str, session_id: str, cwd: str, harness_name: str = "
     # hook runs in the session's repository, and `-m` there would import a
     # `nimblemind/` (or any stdlib name) the repository planted.
     argv = [sys.executable, "-P", "-m", "nimblemind", "distill",
-            "--transcript", transcript_path, "--session-id", session_id, "--cwd", cwd]
+            "--transcript", os.path.abspath(transcript_path), "--session-id", session_id, "--cwd", cwd]
     if harness_name:
         argv += ["--harness", harness_name]
     kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
-                    "stderr": subprocess.DEVNULL, "close_fds": True, "cwd": neutral_dir()}
+                    "stderr": subprocess.DEVNULL, "close_fds": True, "cwd": run_dir()}
     if sys.platform == "win32":
         kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
                                    | subprocess.CREATE_NEW_PROCESS_GROUP

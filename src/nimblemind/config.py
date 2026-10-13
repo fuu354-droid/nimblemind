@@ -365,6 +365,7 @@ def load(cwd: Path | str | None = None) -> Config:
 
     project_file = paths.find_project_config(cwd)
     trusted = False
+    project_lowered_total = False
     if project_file:
         # Read once: the bytes that are hashed for trust are the bytes that
         # are parsed, so a file swapped between the two cannot be trusted.
@@ -390,7 +391,9 @@ def load(cwd: Path | str | None = None) -> Config:
         # Whatever is left is free to set (journal shape, curiosity floor), or
         # was kept because the file is trusted.
         data = _merge(data, project)
+        before = data["budget"].get("total_chars")
         data = _narrow(data, narrowing)
+        project_lowered_total = data["budget"].get("total_chars") != before
         if trusted:
             # A trusted file may add an isolation command. It runs in
             # addition to the user's own, never instead of it: a project
@@ -409,7 +412,7 @@ def load(cwd: Path | str | None = None) -> Config:
     # A project may lower total_chars alone; the parts it bounds follow it
     # down rather than turning an authorized narrowing into a config error.
     b = data["budget"]
-    if project_file:
+    if project_lowered_total:
         for k in ("core_chars", "recall_chars", "prompt_chars"):
             if isinstance(b.get(k), int) and isinstance(b.get("total_chars"), int):
                 b[k] = min(b[k], b["total_chars"])

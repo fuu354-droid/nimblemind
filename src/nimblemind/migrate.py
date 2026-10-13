@@ -57,7 +57,13 @@ def run(cfg, source: Path, kind: str, *, dry_run: bool = False) -> list[str]:
         if dry_run:
             verdict = isolation.Verdict(isolation.REFUSED) if marked \
                 else isolation.check(content, cfg.namespace, cfg)
-            lines.append(f"would {'import' if verdict.ok else 'hold'} {f.name} as {rec.source_id}")
+            if not verdict.ok:
+                word = "hold"
+            elif cfg["approval"].get("cli") == "deny":
+                word = "reject (approval.cli is deny)"
+            else:
+                word = "import"
+            lines.append(f"would {word} {f.name} as {rec.source_id}")
             continue
         if marked:
             # Judged and refused (or never judged) by the old layout's own

@@ -46,9 +46,11 @@ Non-goals, ruled in the origin task:
   directory is not on `PATH` (`-P` keeps the session's directory, which is
   the project, off `sys.path`).
 - Child processes (the distill child, model commands, isolation commands)
-  run in the system temp directory, never in the session's project, and
-  executables are looked up without the current directory, so nothing a
-  repository contains is run by a relative lookup.
+  run in a private directory under the data home (`<home>/run/`, mode
+  0700): never in the session's project, whose files a relative lookup
+  would find, and never in the shared system temp directory, where another
+  local user could plant files. Executables must resolve to an absolute
+  path, looked up without the current directory.
 - No shell wrapper. Every hook command is the console script itself, so the
   same command line works under bash, zsh, PowerShell and cmd.
 - File locking uses `fcntl` on POSIX and `msvcrt` on Windows behind one helper.
@@ -120,7 +122,9 @@ not trusted the way the user's own file is:
   `curiosity.after_run`) applies only once a person has trusted that exact
   file with `nimblemind trust`, at a terminal, which records the hash of
   the bytes it showed, keyed by the file's absolute path as found (not
-  resolved). A `.nimblemind.toml` that is a symlink is never trusted, so one
+  resolved). Every entry point (CLI `--cwd`, hook payload, distill child)
+  normalizes its directory the same way and never resolves symlinks, so a
+  symlinked directory is not taken for the project it points to. A `.nimblemind.toml` that is a symlink is never trusted, so one
   repository cannot borrow another's trust or namespace. Loading reads the file once and checks that same
   read's hash, so an edit, a pulled change or a swap drops trust until it is
   given again. An untrusted file's other keys still apply, and the dropped ones are
@@ -310,8 +314,13 @@ Nothing else in the package calls `Backend.store`.
   file, the argv runs with `{file}` substituted, exit 0 passes, exit 1 refuses
   with stdout as the report, anything else means the check could not run. This
   is how the origin workspace keeps its own `check_output.py` without the
-  package knowing its layout. A trusted project's `command` runs in
-  addition to the user's, never instead of it.
+  package knowing its layout. `{project}` expands to the directory of the
+  project config that applies (a check naming it with no project config is
+  `unavailable`), so a project-relative checker is written
+  `["python", "{project}/scripts/check.py", "{file}"]`. The executable must
+  be an absolute path or found on `PATH`; anything else is `unavailable`. A
+  trusted project's `command` runs in addition to the user's, never
+  instead of it.
 
 The same checks run on every path. A multi-client deployment runs them in
 the service on its write endpoint (`nimblemind serve`, section 10), not in
