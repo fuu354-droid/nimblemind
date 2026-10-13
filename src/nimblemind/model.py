@@ -51,7 +51,7 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
         if not exe:
             raise ModelError("the `claude` CLI is not on PATH; install it or set command = \"argv\"")
         model_name = spec.get("model") or "haiku"
-        if not _SAFE_ARG.match(model_name):
+        if not _SAFE_ARG.fullmatch(model_name):
             raise ModelError(f"model name {model_name!r} has characters a command line cannot carry safely")
         # Only fixed, safe tokens go on the command line. The instructions
         # travel on stdin with the transcript: on Windows an npm-installed
@@ -64,7 +64,7 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
         stdin = system + "\n\n" + user
     elif command == "argv":
         raw_argv = spec.get("argv") or []
-        if any("{model}" in a for a in raw_argv) and not _SAFE_ARG.match(spec.get("model") or ""):
+        if any("{model}" in a for a in raw_argv) and not _SAFE_ARG.fullmatch(spec.get("model") or ""):
             raise ModelError(f"model name {spec.get('model')!r} has characters a command line "
                              "cannot carry safely")
         argv = [a.replace("{model}", spec.get("model", "")) for a in raw_argv]

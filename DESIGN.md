@@ -218,7 +218,8 @@ Backends:
   `forbidden_endpoints` in its config refuses named hosts and ports before a
   socket opens (the origin workspace uses it to keep personal memory off a
   company service). An entry is `host:port`, `:port` (any host), or a bare
-  `host` (every port); a URL whose host part carries any percent-encoding
+  `host` (every port), and anything else (not a list of strings, a URL, a
+  trailing colon) is a config error; a URL whose host part carries any percent-encoding
   is refused, since urllib decodes it before connecting. Addresses compare
   in one canonical spelling: an
   IPv4-mapped address is its IPv4 address, and an unspecified address

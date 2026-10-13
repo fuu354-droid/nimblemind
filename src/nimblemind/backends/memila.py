@@ -132,7 +132,15 @@ class MemilaBackend:
         env = _env_file()
         url = spec.get("url") or os.environ.get("MEMILA_URL") or env.get("MEMILA_URL") or DEFAULT_URL
         key = os.environ.get("MEMILA_API_KEY") or env.get("MEMILA_API_KEY") or ""
-        return cls(url, key, float(spec.get("timeout", 30)), spec.get("forbidden_endpoints"))
+        forbidden = spec.get("forbidden_endpoints") or []
+        if not isinstance(forbidden, list) or not all(isinstance(e, str) for e in forbidden):
+            raise BackendError("backend.forbidden_endpoints must be a list of strings")
+        for e in forbidden:
+            host, _port = _entry(e)
+            if not e.strip() or "/" in e or e.strip().endswith(":") or (not host and _port is None):
+                raise BackendError(f"backend.forbidden_endpoints entry {e!r} is not host, "
+                                   "host:port or :port")
+        return cls(url, key, float(spec.get("timeout", 30)), forbidden)
 
     def _call(self, path: str, body: dict, method: str = "POST", timeout: float | None = None):
         if is_forbidden(self.url, self.forbidden):
