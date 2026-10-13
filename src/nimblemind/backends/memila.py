@@ -258,7 +258,8 @@ class MemilaBackend:
             if not isinstance(source, str) or not isinstance(text, str) or not text.strip():
                 continue
             scores = {k2: v for k2, v in hit.items()
-                      if k2.endswith("score") and isinstance(v, (int, float))}
+                      if k2.endswith("score") and isinstance(v, (int, float))
+                      and not isinstance(v, bool) and math.isfinite(v)}
             out.append(Evidence(source_id=source, content=text.strip(), scores=scores,
                                 adapter=self.name))
         return out

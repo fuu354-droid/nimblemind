@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -89,11 +90,30 @@ def say(*parts, file=None) -> None:
     print(*(visible(p) for p in parts), file=file)
 
 
+def _jsonable(obj):
+    """`obj` with every value strict JSON can carry: non-finite floats (TOML
+    allows inf and nan, a backend may send them) and dates or times become
+    their text, so `--json` output parses under any JSON parser."""
+    if isinstance(obj, dict):
+        return {str(k): _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(v) for v in obj]
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return str(obj)
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    return str(obj)
+
+
+def _json(obj) -> str:
+    return json.dumps(_jsonable(obj), ensure_ascii=False, indent=2, allow_nan=False)
+
+
 def _out(args, obj, text: str) -> None:
     if getattr(args, "json", False):
         # default=str: TOML dates and times are valid config values JSON has
         # no type for; they print as their ISO text instead of crashing.
-        print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
+        print(_json(obj))
     elif text:
         say(text)
 
@@ -435,10 +455,9 @@ def cmd_config(args) -> int:
     _out(args, {"data_home": str(paths.data_home()), "user_config": str(paths.user_config()),
                 "project_config": str(cfg.project_file or ""), "project_trusted": cfg.project_trusted,
                 "effective": cfg.data},
-         json.dumps({"data_home": str(paths.data_home()), "user_config": str(paths.user_config()),
-                     "project_config": str(cfg.project_file or ""),
-                     "project_trusted": cfg.project_trusted, "effective": cfg.data},
-                    ensure_ascii=False, indent=2, default=str))
+         _json({"data_home": str(paths.data_home()), "user_config": str(paths.user_config()),
+                "project_config": str(cfg.project_file or ""),
+                "project_trusted": cfg.project_trusted, "effective": cfg.data}))
     return 0
 
 

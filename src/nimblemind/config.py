@@ -61,7 +61,7 @@ DEFAULTS: dict = {
     "approval": {p: "ask" for p in APPROVAL_PATHS},
     "isolation": {"checks": ["builtin-secrets"], "deny": [], "identity": {},
                   "command": [], "project_command": [], "timeout": 60.0},
-    "curiosity": {"confidence_floor": 70, "gaps_file": "", "after_run": []},
+    "curiosity": {"confidence_floor": 70.0, "gaps_file": "", "after_run": []},
 }
 
 # Keys a project config may set only once trusted. Dotted paths.
@@ -234,6 +234,15 @@ def _check_narrowable(data: dict) -> None:
     for k, v in data["budget"].items():
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:
             raise ConfigError(f"budget.{k}: must be a non-negative integer")
+    iso = data["isolation"]
+    for key in ("checks", "deny"):
+        v = iso.get(key)
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise ConfigError(f"isolation.{key} must be a list of strings")
+    ident = iso.get("identity")
+    if not isinstance(ident, dict) or not all(
+            isinstance(v, list) and all(isinstance(x, str) for x in v) for v in ident.values()):
+        raise ConfigError("isolation.identity must map each namespace to a list of strings")
 
 
 def _positive_int(value) -> bool:
@@ -487,8 +496,8 @@ def load(cwd: Path | str | None = None) -> Config:
         # before the project's checks are merged in: a project turning on
         # its own command check (in `checks`, as documented) must not look
         # like a user check left without a command.
-        user_wants_command = "command" in data["isolation"]["checks"]
         _check_narrowable(data)
+        user_wants_command = "command" in data["isolation"]["checks"]
         data = _narrow(data, narrowing)
         project_lowered_total = data["budget"].get("total_chars") != before
         if trusted:
