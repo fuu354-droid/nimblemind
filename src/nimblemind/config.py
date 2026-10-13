@@ -36,6 +36,7 @@ from pathlib import Path
 from nimblemind import paths
 from nimblemind.fsutil import atomic_write, read_text
 
+MAX_JOURNAL_NUMBER = 1_000_000  # words or turns; past it the value is a mistake
 MAX_TIMEOUT = 86400  # one day; past it a timeout is a mistake, and huge values overflow
 APPROVAL_PATHS = ("distill", "research", "gap", "provider", "cli")
 APPROVAL_LEVELS = ("deny", "ask", "allow")  # strictest first
@@ -115,8 +116,10 @@ def _load_toml(path: Path) -> dict:
         return tomllib.loads(path.read_bytes().decode("utf-8-sig"))
     except FileNotFoundError:
         return {}
-    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError) as e:
-        raise ConfigError(f"{path}: {e}") from None
+    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError, ValueError, RecursionError) as e:
+        # ValueError and RecursionError: valid-looking TOML that tomllib
+        # cannot convert (a 5000-digit integer, arrays nested very deep).
+        raise ConfigError(f"{path}: {type(e).__name__}: {e}") from None
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -243,6 +246,14 @@ def _check_narrowable(data: dict) -> None:
     if not isinstance(ident, dict) or not all(
             isinstance(v, list) and all(isinstance(x, str) for x in v) for v in ident.values()):
         raise ConfigError("isolation.identity must map each namespace to a list of strings")
+    _check_timeout("isolation", iso.get("timeout"))
+
+
+def _check_timeout(section: str, t) -> None:
+    if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) \
+            or not 0 < t <= MAX_TIMEOUT:
+        raise ConfigError(f"{section}.timeout must be a positive number of seconds, "
+                          f"at most {MAX_TIMEOUT}")
 
 
 def _positive_int(value) -> bool:
@@ -252,8 +263,15 @@ def _positive_int(value) -> bool:
 def _validate(data: dict) -> None:
     j = data["journal"]
     for k in ("max_words", "min_turns"):
-        if not _positive_int(j.get(k)):
-            raise ConfigError(f"journal.{k} must be a positive integer")
+        if not _positive_int(j.get(k)) or j[k] > MAX_JOURNAL_NUMBER:
+            raise ConfigError(f"journal.{k} must be a positive integer, at most {MAX_JOURNAL_NUMBER}")
+    for k in ("sections", "recall_sections", "banned_chars"):
+        v = j.get(k)
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise ConfigError(f"journal.{k} must be a list of strings")
+    for k in ("language", "instructions"):
+        if not isinstance(j.get(k), str):
+            raise ConfigError(f"journal.{k} must be a string")
     floor = data["curiosity"].get("confidence_floor")
     if isinstance(floor, bool) or not isinstance(floor, (int, float)) \
             or not math.isfinite(floor) or not 0 <= floor <= 100:
@@ -288,11 +306,7 @@ def _validate(data: dict) -> None:
             isinstance(v, list) and all(isinstance(x, str) for x in v) for v in ident.values()):
         raise ConfigError("isolation.identity must map each namespace to a list of strings")
     for section in ("isolation", "distiller", "researcher"):
-        t = data[section].get("timeout")
-        if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) \
-                or not 0 < t <= MAX_TIMEOUT:
-            raise ConfigError(f"{section}.timeout must be a positive number of seconds, "
-                              f"at most {MAX_TIMEOUT}")
+        _check_timeout(section, data[section].get("timeout"))
     known = {"builtin-secrets", "builtin-patterns", "command"}
     for c in data["isolation"]["checks"]:
         if c not in known:
@@ -467,7 +481,7 @@ def load(cwd: Path | str | None = None) -> Config:
             raise ConfigError(f"{project_file}: {e}") from None
         try:
             project = tomllib.loads(raw.decode("utf-8-sig"))
-        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError, ValueError, RecursionError) as e:
             raise ConfigError(f"{project_file}: {e}") from None
         trusted = (not project_file.is_symlink()
                    and _trusted().get(_trust_key(project_file)) == hashlib.sha256(raw).hexdigest())
