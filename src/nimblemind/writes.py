@@ -20,7 +20,7 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
-from nimblemind import approval, isolation
+from nimblemind import approval, isolation, paths
 from nimblemind import backends as backends_mod
 from nimblemind.backends.local import LocalBackend
 from nimblemind.config import APPROVAL_PATHS
@@ -160,11 +160,17 @@ def _consume(cfg, entry_id: str) -> None:
 def _commit(cfg, rec: Record, *, path: str, by: str, rule: str) -> str:
     """Store, then log the approval. In that order: a crash between the two
     leaves a record `audit` reports as unapproved, which is the safe side; the
-    other order would leave an approval for something never stored."""
-    detail = _store(cfg, rec)
-    approval.record(cfg.layout(rec.namespace).approvals, source_id=rec.source_id,
-                    namespace=rec.namespace, path=path, sha256=rec.digest,
-                    approved_by=by, rule=rule)
+    other order would leave an approval for something never stored.
+
+    The pair runs under one lock per namespace, so two writes to the same
+    source id cannot interleave: the last approval logged is always for the
+    content that ends up stored."""
+    layout = cfg.layout(rec.namespace)
+    with file_lock(layout.locks / f"commit-{paths.safe_name(rec.namespace)}.lock"):
+        detail = _store(cfg, rec)
+        approval.record(layout.approvals, source_id=rec.source_id,
+                        namespace=rec.namespace, path=path, sha256=rec.digest,
+                        approved_by=by, rule=rule)
     return detail
 
 

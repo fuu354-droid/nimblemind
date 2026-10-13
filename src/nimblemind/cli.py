@@ -125,7 +125,8 @@ def cmd_hook(args) -> int:
 def cmd_distill(args) -> int:
     from nimblemind import distill
 
-    cfg = config_mod.load(Path(args.cwd).resolve() if args.cwd else None)
+    # The project config always applies: from --cwd, else this directory.
+    cfg = config_mod.load(Path(args.cwd or Path.cwd()).resolve())
     if args.harness:
         cfg.data["harness"] = args.harness
     try:

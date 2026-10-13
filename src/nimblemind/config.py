@@ -70,6 +70,11 @@ TRUST_REQUIRED = (
 )
 NARROWING = ("approval", "budget", "isolation")
 
+# Optional scalar keys that have no default but may still come from the
+# environment (DESIGN.md section 4's NIMBLEMIND_<SECTION>_<KEY> applies to
+# every documented scalar). The value shows the type to coerce to.
+ENV_OPTIONAL = {"backend": {"url": "", "timeout": 30.0, "target": ""}}
+
 # Environment overrides for scalar keys: NIMBLEMIND_<SECTION>_<KEY>, or
 # NIMBLEMIND_<KEY> for a top-level one. Applied at the user layer.
 ENV_PREFIX = "NIMBLEMIND_"
@@ -127,6 +132,8 @@ def _coerce(raw: str, like):
         return raw.strip().lower() in ("1", "true", "yes", "on")
     if isinstance(like, int):
         return int(raw)
+    if isinstance(like, float):
+        return float(raw)
     return raw
 
 
@@ -143,7 +150,7 @@ def _env_layer(defaults: dict, sections: tuple[str, ...] | None) -> dict:
         if key == "approval" or (sections is not None and key not in sections):
             continue
         if isinstance(value, dict):
-            for sub, subval in value.items():
+            for sub, subval in {**ENV_OPTIONAL.get(key, {}), **value}.items():
                 if isinstance(subval, (dict, list)):
                     continue
                 raw = os.environ.get(f"{ENV_PREFIX}{key}_{sub}".upper())
