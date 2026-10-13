@@ -105,7 +105,7 @@ def which(name: str) -> str | None:
     if sys.platform == "win32":
         os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
     found = shutil.which(name)
-    return found if found and os.path.isabs(found) else None
+    return found if found and is_absolute(found) else None
 
 
 def run_dir() -> str:
@@ -152,3 +152,15 @@ def logical_cwd() -> str:
         except OSError:
             pass
     return here
+
+
+def is_absolute(path: str) -> bool:
+    """Absolute on every platform: on Windows that also needs a drive or a
+    UNC share, since `\\x` (rooted, no drive) is relative to the current
+    drive and `os.path.isabs` calls it absolute before Python 3.13."""
+    if not os.path.isabs(path):
+        return False
+    if sys.platform == "win32":
+        drive, _ = os.path.splitdrive(path)
+        return bool(drive)
+    return True

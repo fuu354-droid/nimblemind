@@ -135,7 +135,7 @@ def _anchor(cfg, entry_id: str, namespace: str, digest: str) -> None:
 
 def _anchored(cfg, entry_id: str) -> dict | None:
     try:
-        lines = read_text(_anchor_file(cfg)).splitlines()
+        lines = read_text(_anchor_file(cfg)).split("\n")
     except OSError:
         return None
     found = None

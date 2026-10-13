@@ -33,7 +33,7 @@ def record(log: Path, *, source_id: str, namespace: str, path: str, sha256: str,
     entry = {"source_id": source_id, "namespace": namespace, "path": path,
              "sha256": sha256, "approved_by": approved_by, "approved_at": now_iso(),
              "rule": rule}
-    append_line(log, json.dumps(entry, ensure_ascii=False), lock=log.with_suffix(".lock"))
+    append_line(log, json.dumps(entry), lock=log.with_suffix(".lock"))
     return entry
 
 
@@ -43,7 +43,9 @@ def entries(log: Path) -> list[dict]:
     except OSError:
         return []
     out = []
-    for line in text.splitlines():
+    # split on "\n" only: str.splitlines also breaks on U+2028 and U+0085,
+    # which an opaque namespace may contain.
+    for line in text.split("\n"):
         try:
             e = json.loads(line)
         except ValueError:

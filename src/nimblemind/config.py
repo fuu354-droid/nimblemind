@@ -42,8 +42,8 @@ DEFAULTS: dict = {
     "namespace": "default",
     "harness": "claude-code",
     "backend": {"name": "local"},
-    "distiller": {"command": "claude-cli", "model": "haiku", "argv": [], "timeout": 300},
-    "researcher": {"command": "claude-cli", "model": "sonnet", "argv": [], "timeout": 900},
+    "distiller": {"command": "claude-cli", "model": "haiku", "argv": [], "timeout": 300.0},
+    "researcher": {"command": "claude-cli", "model": "sonnet", "argv": [], "timeout": 900.0},
     "journal": {
         "sections": ["Decisions", "Rulings", "Pitfalls", "Unfinished",
                      "Lessons learned", "Improvements found"],

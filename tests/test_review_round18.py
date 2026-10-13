@@ -10,7 +10,9 @@ from nimblemind.backends.memila import MemilaBackend
 
 
 @pytest.mark.parametrize("name", ["haiku\n", "haiku\r", "haiku\n\n"])
-def test_f18_1_trailing_newline_in_a_model_name_is_refused(name):
+def test_f18_1_trailing_newline_in_a_model_name_is_refused(name, monkeypatch):
+    # Never reach a real `claude` (round 19, F19-3): the lookup is faked.
+    monkeypatch.setattr(model, "which", lambda n: "/nonexistent/claude")
     with pytest.raises(model.ModelError, match="cannot carry safely"):
         model.run({"command": "claude-cli", "model": name}, "s", "u")
     with pytest.raises(model.ModelError, match="cannot carry safely"):

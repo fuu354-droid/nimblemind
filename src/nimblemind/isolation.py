@@ -14,7 +14,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 
-from nimblemind.fsutil import private_dir, which
+from nimblemind.fsutil import is_absolute, private_dir, which
 
 PASS, REFUSED, UNAVAILABLE = "pass", "refused", "unavailable"
 
@@ -86,7 +86,7 @@ def _command(content: str, iso: dict, argv: list, project: str = "") -> Verdict:
         cmd = [a.replace("{file}", path) for a in argv]
         if not any("{file}" in a for a in argv):
             cmd.append(path)
-        resolved = cmd[0] if os.path.isabs(cmd[0]) else which(cmd[0])
+        resolved = cmd[0] if is_absolute(cmd[0]) else which(cmd[0])
         if not resolved:
             return Verdict(UNAVAILABLE, f"isolation command {cmd[0]!r} is not an absolute path "
                                         "and was not found on PATH")

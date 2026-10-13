@@ -58,7 +58,7 @@ def problems(cfg, text: str) -> list[str]:
         n = len(_CJK.findall(text))
         if n:
             out.append(f"contains {n} CJK characters; the journal must be in {j['language']} only")
-    missing = [h for h in headers(cfg) if h not in text.splitlines()]
+    missing = [h for h in headers(cfg) if h not in text.split("\n")]
     if missing:
         out.append("missing required sections: " + ", ".join(missing))
     words = len(text.split())
@@ -69,7 +69,7 @@ def problems(cfg, text: str) -> list[str]:
 
 def section(text: str, name: str) -> str:
     """The body under `## name`, up to the next `## ` header."""
-    lines = text.splitlines()
+    lines = text.split("\n")
     try:
         start = lines.index(f"## {name}") + 1
     except ValueError:
@@ -85,7 +85,7 @@ def section(text: str, name: str) -> str:
 def is_journal(cfg, text: str) -> bool:
     """Whether `text` is shaped like a journal: it carries any configured
     section header."""
-    lines = set(text.splitlines())
+    lines = set(text.split("\n"))
     return any(h in lines for h in headers(cfg))
 
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import socket
 import urllib.error
 import urllib.parse
@@ -81,16 +82,62 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
 
 
+_HOSTNAME = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                       r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$")
+
+
+def _host_ok(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return bool(_HOSTNAME.match(host))
+
+
+def _port_ok(port: str) -> bool:
+    return port.isascii() and port.isdigit() and 1 <= int(port) <= 65535
+
+
 def _entry(entry: str) -> tuple[str, int | None]:
-    """A forbidden_endpoints entry as (host, port); port None means every
-    port. Forms: "host:port", ":port", "[v6]:port", "host", "[v6]"."""
-    entry = entry.strip()
-    if entry.startswith("[") and entry.endswith("]"):
-        return entry[1:-1], None
-    head, sep, tail = entry.rpartition(":")
-    if sep and tail.isdigit() and (head.startswith("[") or ":" not in head):
-        return head.strip("[]"), int(tail)
-    return entry.strip("[]"), None
+    """A forbidden_endpoints entry as (host, port), parsed strictly; port None
+    means every port. Accepted: `host`, `host:port`, `:port`, `[v6]`,
+    `[v6]:port`, where host is an IP address or a hostname of letters,
+    digits, `-` and `.`, and port is 1-65535. Anything else raises
+    ValueError, so a mistyped entry is a config error, never an entry that
+    silently matches nothing."""
+    if not isinstance(entry, str) or not entry or entry != entry.strip():
+        raise ValueError(f"forbidden endpoint {entry!r} is not host, host:port or :port")
+    if entry.startswith("["):
+        close = entry.find("]")
+        if close < 0 or not _is_v6(entry[1:close]):
+            raise ValueError(f"forbidden endpoint {entry!r}: bracketed host must be IPv6")
+        host, rest = entry[1:close], entry[close + 1:]
+        if rest == "":
+            return host, None
+        if rest.startswith(":") and _port_ok(rest[1:]):
+            return host, int(rest[1:])
+        raise ValueError(f"forbidden endpoint {entry!r}: bad port")
+    if entry.count(":") > 1:
+        if _is_v6(entry):
+            return entry, None
+        raise ValueError(f"forbidden endpoint {entry!r}: write IPv6 as [addr] or [addr]:port")
+    host, sep, port = entry.partition(":")
+    if sep:
+        if not _port_ok(port):
+            raise ValueError(f"forbidden endpoint {entry!r}: port must be 1-65535")
+        if host and not _host_ok(host):
+            raise ValueError(f"forbidden endpoint {entry!r}: bad host")
+        return host, int(port)
+    if not _host_ok(host):
+        raise ValueError(f"forbidden endpoint {entry!r}: bad host")
+    return host, None
+
+
+def _is_v6(text: str) -> bool:
+    try:
+        return isinstance(ipaddress.ip_address(text), ipaddress.IPv6Address)
+    except ValueError:
+        return False
 
 
 def is_forbidden(url: str, forbidden: list[str]) -> bool:
@@ -107,7 +154,10 @@ def is_forbidden(url: str, forbidden: list[str]) -> bool:
         return True
     host = parts.hostname or ""
     for entry in forbidden:
-        f_host, f_port = _entry(entry)
+        try:
+            f_host, f_port = _entry(entry)
+        except ValueError:
+            return True  # an entry that cannot be read cannot show the URL allowed
         if f_port is not None and f_port != port:
             continue
         if not f_host:
@@ -136,10 +186,10 @@ class MemilaBackend:
         if not isinstance(forbidden, list) or not all(isinstance(e, str) for e in forbidden):
             raise BackendError("backend.forbidden_endpoints must be a list of strings")
         for e in forbidden:
-            host, _port = _entry(e)
-            if not e.strip() or "/" in e or e.strip().endswith(":") or (not host and _port is None):
-                raise BackendError(f"backend.forbidden_endpoints entry {e!r} is not host, "
-                                   "host:port or :port")
+            try:
+                _entry(e)
+            except ValueError as err:
+                raise BackendError(f"backend.forbidden_endpoints: {err}") from None
         return cls(url, key, float(spec.get("timeout", 30)), forbidden)
 
     def _call(self, path: str, body: dict, method: str = "POST", timeout: float | None = None):

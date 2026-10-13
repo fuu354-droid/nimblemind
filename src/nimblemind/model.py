@@ -20,7 +20,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 
-from nimblemind.fsutil import private_dir, which
+from nimblemind.fsutil import is_absolute, private_dir, which
 
 CHILD_ENV = "NIMBLEMIND_CHILD"
 _SAFE_ARG = re.compile(r"^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,99}$")  # no leading "-"
@@ -47,12 +47,12 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
     if command == "none":
         raise ModelError("model command is `none`")
     if command == "claude-cli":
+        model_name = spec.get("model") or "haiku"
+        if not isinstance(model_name, str) or not _SAFE_ARG.fullmatch(model_name):
+            raise ModelError(f"model name {model_name!r} has characters a command line cannot carry safely")
         exe = which("claude")
         if not exe:
             raise ModelError("the `claude` CLI is not on PATH; install it or set command = \"argv\"")
-        model_name = spec.get("model") or "haiku"
-        if not _SAFE_ARG.fullmatch(model_name):
-            raise ModelError(f"model name {model_name!r} has characters a command line cannot carry safely")
         # Only fixed, safe tokens go on the command line. The instructions
         # travel on stdin with the transcript: on Windows an npm-installed
         # `claude` is a .cmd shim run through cmd.exe, whose quoting no
@@ -70,7 +70,7 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
         argv = [a.replace("{model}", spec.get("model", "")) for a in raw_argv]
         if not argv:
             raise ModelError('command = "argv" needs a non-empty argv list')
-        resolved = argv[0] if os.path.isabs(argv[0]) else which(argv[0])
+        resolved = argv[0] if is_absolute(argv[0]) else which(argv[0])
         if not resolved:
             raise ModelError(f"model command {argv[0]!r} is not an absolute path and was not "
                              "found on PATH")
