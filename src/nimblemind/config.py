@@ -225,7 +225,30 @@ def _narrow(user: dict, project: dict) -> dict:
     return out
 
 
+def _check_narrowable(data: dict) -> None:
+    """The user-level values a project may narrow, checked before narrowing
+    compares them, so a wrong type is a config error and not a crash."""
+    for p, level in data["approval"].items():
+        if level not in APPROVAL_LEVELS:
+            raise ConfigError(f"approval.{p}: {level!r} is not one of {APPROVAL_LEVELS}")
+    for k, v in data["budget"].items():
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            raise ConfigError(f"budget.{k}: must be a non-negative integer")
+
+
+def _positive_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 def _validate(data: dict) -> None:
+    j = data["journal"]
+    for k in ("max_words", "min_turns"):
+        if not _positive_int(j.get(k)):
+            raise ConfigError(f"journal.{k} must be a positive integer")
+    floor = data["curiosity"].get("confidence_floor")
+    if isinstance(floor, bool) or not isinstance(floor, (int, float)) \
+            or not math.isfinite(floor) or not 0 <= floor <= 100:
+        raise ConfigError("curiosity.confidence_floor must be a number from 0 to 100")
     for p, level in data["approval"].items():
         if p not in APPROVAL_PATHS:
             raise ConfigError(f"approval.{p}: unknown write path; expected one of {APPROVAL_PATHS}")
@@ -465,6 +488,7 @@ def load(cwd: Path | str | None = None) -> Config:
         # its own command check (in `checks`, as documented) must not look
         # like a user check left without a command.
         user_wants_command = "command" in data["isolation"]["checks"]
+        _check_narrowable(data)
         data = _narrow(data, narrowing)
         project_lowered_total = data["budget"].get("total_chars") != before
         if trusted:
