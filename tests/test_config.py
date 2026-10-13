@@ -128,3 +128,9 @@ def test_safe_name_is_injective_and_portable():
     # case-insensitive filesystems: two names differing only in case must
     # not differ only in case on disk
     assert paths.safe_name("A").lower() != paths.safe_name("a").lower()
+
+
+def test_scalar_narrowing_section_is_a_clean_config_error(tmp_path):
+    project(tmp_path, 'approval = "allow"\n')
+    with pytest.raises(config_mod.ConfigError, match="must be a table"):
+        config_mod.load(tmp_path / "repo")

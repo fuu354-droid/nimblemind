@@ -136,7 +136,7 @@ def _env_layer(defaults: dict, sections: tuple[str, ...] | None) -> dict:
     `approval` is never read from the environment: an agent can set a
     variable on its own command line, and an approval it can grant itself is
     no approval (DESIGN.md section 7). The only scripted way to `allow` a
-    path is the user's own config file.
+    path is a standing grant from `memila-brain approval allow`.
     """
     layer: dict = {}
     for key, value in defaults.items():
@@ -355,6 +355,9 @@ def load(cwd: Path | str | None = None) -> Config:
                 notes.append(f"{project_file}: not trusted, ignored {', '.join(dropped)} "
                               f"(run `memila-brain trust {project_file}`)")
         narrowing = {k: project.pop(k) for k in NARROWING if k in project}
+        bad = [k for k, v in narrowing.items() if not isinstance(v, dict)]
+        if bad:
+            raise ConfigError(f"{project_file}: {', '.join(bad)} must be a table")
         # Whatever is left is free to set (journal shape, curiosity floor), or
         # was kept because the file is trusted.
         data = _merge(data, project)

@@ -34,7 +34,7 @@ def confirm(question: str) -> str:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise NotATerminal(
             "this approves a write, which needs a person at a terminal; "
-            "run it in a terminal, or set an `allow` rule in your user config")
+            "run it in a terminal, or grant the path with `memila-brain approval allow <path>`")
     answer = input(f"{question} Type yes to approve: ").strip().lower()
     if answer != "yes":
         raise SystemExit("not approved")
