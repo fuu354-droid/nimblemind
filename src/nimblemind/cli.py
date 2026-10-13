@@ -275,10 +275,12 @@ def cmd_pending(args) -> int:
         raise SystemExit(f"pending {args.action} needs at least one id")
     if args.action == "show":
         items = [e for e in writes.pending(cfg) if e["id"] in args.ids]
+        for i in sorted(set(args.ids) - {e["id"] for e in items}):
+            say(f"FAIL {i}: no pending entry")
         _out(args, items, "\n".join(
             f"== {e['id']} ({e['path']}, {e['record']['source_id']})\n{e['record']['content']}"
             for e in items))
-        return 0 if items else 1
+        return 0 if len(items) == len(set(args.ids)) else 1
     if args.action == "reject":
         failed = 0
         for i in args.ids:
@@ -324,15 +326,18 @@ def cmd_held(args) -> int:
             f"{e['id']}  {e['verdict']:<11} {e['record']['source_id']}: {e['report'][:80]}"
             for e in items) or "(nothing held)")
         return 0
+
+    if not args.ids:
+        raise SystemExit(f"held {args.action} needs at least one id")
+    unknown = [i for i in args.ids if i not in {e["id"] for e in items}]
+    for i in unknown:
+        say(f"FAIL {i}: no held entry")
     if args.action == "show":
         shown = [e for e in items if e["id"] in args.ids]
         _out(args, shown, "\n".join(
             f"== {e['id']} ({e['verdict']}: {e['report']})\n{e['record']['content']}"
             for e in shown))
-        return 0 if shown else 1
-    unknown = [i for i in args.ids if i not in {e["id"] for e in items}]
-    for i in unknown:
-        say(f"FAIL {i}: no held entry")
+        return 1 if unknown else 0
     for e in items:
         if e["id"] in args.ids:
             if args.action == "discard":
@@ -346,9 +351,10 @@ def cmd_approval(args) -> int:
 
     cfg = _cfg(args)
     if args.action == "show":
-        for p in APPROVAL_PATHS:
-            say(f"{p:<9} {cfg['approval'][p]}")
-        say(f"grants file: {config_mod.grants_file()}")
+        levels = {p: cfg["approval"][p] for p in APPROVAL_PATHS}
+        _out(args, {"levels": levels, "grants_file": str(config_mod.grants_file())},
+             "\n".join(f"{p:<9} {lvl}" for p, lvl in levels.items())
+             + f"\ngrants file: {config_mod.grants_file()}")
         return 0
     if args.path not in APPROVAL_PATHS:
         raise SystemExit(f"approval {args.action} needs a write path: {', '.join(APPROVAL_PATHS)}")
@@ -369,7 +375,8 @@ def cmd_audit(args) -> int:
 
     cfg = _cfg(args)
     problems = writes.audit(cfg, args.namespace or None)
-    say("\n".join(problems) if problems else "audit clean")
+    _out(args, {"clean": not problems, "problems": problems},
+         "\n".join(problems) if problems else "audit clean")
     return 1 if problems else 0
 
 
@@ -406,6 +413,8 @@ def cmd_trust(args) -> int:
     if args.revoke:
         say(("untrusted " if config_mod.untrust(path) else "was not trusted: ") + str(path))
         return 0
+    if path.is_symlink():
+        raise SystemExit(visible(f"{path} is a symlink; trust the file it points to in its own project"))
     shown = path.read_bytes()
     say(shown.decode("utf-8", errors="replace"))
     confirm(f"Trust {path} to run the commands and choose the backend shown above?")
@@ -435,12 +444,11 @@ def cmd_migrate(args) -> int:
     from nimblemind import migrate
 
     cfg = _cfg(args)
-    if not args.dry_run:
-        confirm(f"Import every passing file in {args.from_dir or args.source} "
-                f"into namespace {cfg.namespace!r}?")
     source = args.from_dir or args.source
     if not source:
         raise SystemExit("migrate needs a source directory (positional, or --from)")
+    if not args.dry_run:
+        confirm(f"Import every passing file in {source} into namespace {cfg.namespace!r}?")
     lines = migrate.run(cfg, Path(source).expanduser(), args.kind, dry_run=args.dry_run)
     say("\n".join(lines) or "(no files)")
     return 1 if any(ln.startswith("FAIL") for ln in lines) else 0
@@ -505,10 +513,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap_.add_argument("path", nargs="?")
     ap_.add_argument("--cwd")
     ap_.add_argument("--namespace")
+    ap_.add_argument("--json", action="store_true", help="machine-readable output")
     ap_.set_defaults(fn=cmd_approval)
 
-    common(sub.add_parser("audit", help="check stored records against the approval log"),
-           json_flag=False).set_defaults(fn=cmd_audit)
+    common(sub.add_parser("audit", help="check stored records against the approval log")
+           ).set_defaults(fn=cmd_audit)
     common(sub.add_parser("flush", help="resend records the backend missed"),
            json_flag=False).set_defaults(fn=cmd_flush)
 
