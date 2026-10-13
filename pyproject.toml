@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memila-brain"
+version = "0.1.0"
+description = "Session memory and a curiosity queue for AI coding agents, with zero-infrastructure local storage."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.scripts]
+memila-brain = "memila_brain.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memila_brain"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["tests"]

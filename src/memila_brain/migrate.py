@@ -1,0 +1,74 @@
+"""Import journals and answers from an older on-disk layout (DESIGN.md
+section 13).
+
+The source directory is read, never changed. A plain `*.md` file is imported
+as a stored record when it passes this install's isolation check, with an
+approval entry of rule `migrated`; a file the old layout had marked
+(`.quarantine.md`, `.unscanned.md`), or one this install's check refuses,
+goes to `held/`. Re-running is safe: a source id already stored with the
+same content is skipped.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+
+from memila_brain import approval, isolation, writes
+from memila_brain.fsutil import read_text
+from memila_brain.records import Record
+
+MARKS = (".quarantine.md", ".unscanned.md")
+
+
+def _stem(name: str) -> tuple[str, bool]:
+    for m in MARKS:
+        if name.endswith(m):
+            return name[: -len(m)], True
+    return name[: -len(".md")], False
+
+
+def run(cfg, source: Path, kind: str, *, dry_run: bool = False) -> list[str]:
+    """One line per file; the caller prints them."""
+    lines: list[str] = []
+    if not source.is_dir():
+        return [f"FAIL {source}: not a directory"]
+    prefix = "session:" if kind == "journal" else "gap:" if kind == "answer" else f"{kind}:"
+    local = writes.canonical(cfg)
+    who = approval.who()
+    for f in sorted(source.glob("*.md")):
+        stem, marked = _stem(f.name)
+        if not stem:
+            lines.append(f"skip {f.name}: no name left after its marks")
+            continue
+        try:
+            content = read_text(f)
+            mtime = datetime.fromtimestamp(f.stat().st_mtime, timezone.utc)
+        except OSError as e:
+            lines.append(f"FAIL {f.name}: {e}")
+            continue
+        rec = Record(source_id=prefix + stem, namespace=cfg.namespace, kind=kind,
+                     content=content, metadata={"migrated_from": str(f)},
+                     created_at=mtime.isoformat(timespec="seconds"))
+        existing = local.get(rec.source_id, cfg.namespace)
+        if existing is not None and existing.digest == rec.digest:
+            lines.append(f"skip {f.name}: already imported")
+            continue
+        verdict = isolation.Verdict(isolation.REFUSED, "marked in the source layout") if marked \
+            else isolation.check(content, cfg.namespace, cfg)
+        if dry_run:
+            lines.append(f"would {'import' if verdict.ok else 'hold'} {f.name} as {rec.source_id}")
+            continue
+        if not verdict.ok:
+            writes._save_entry(cfg.layout().held, {
+                "record": rec.to_dict(), "path": "cli", "sha256": rec.digest,
+                "verdict": verdict.state, "report": verdict.report,
+                "held_at": rec.created_at,
+            })
+            lines.append(f"held {f.name}: {verdict.report[:120]}")
+            continue
+        approval.record(cfg.layout().approvals, source_id=rec.source_id, namespace=cfg.namespace,
+                        path="cli", sha256=rec.digest, approved_by=who, rule="migrated")
+        detail = writes._store(cfg, rec)
+        lines.append(f"ok {f.name} -> {rec.source_id}" + (f" ({detail})" if detail else ""))
+    return lines
