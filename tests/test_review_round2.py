@@ -98,7 +98,7 @@ def test_approved_entry_cannot_be_replayed(cfg):
     f = c.layout().pending / f"{r.entry_id}.json"
     saved = f.read_text(encoding="utf-8")
     writes.approve(c, r.entry_id, by="t")
-    f.write_text(saved.replace("note:", "note-again:"), encoding="utf-8")
+    f.write_text(saved, encoding="utf-8")  # the exact entry, put back
     with pytest.raises(ValueError, match="does not match"):
         writes.approve(c, r.entry_id, by="t")
 
@@ -109,8 +109,9 @@ def test_negative_project_budget_is_ignored(tmp_path):
 
 
 def test_memila_ignores_proxy_environment(monkeypatch):
+    import importlib
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from memila_brain.backends.memila import MemilaBackend
+    from memila_brain.backends import memila
 
     hits = []
 
@@ -134,6 +135,8 @@ def test_memila_ignores_proxy_environment(monkeypatch):
         monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy.server_address[1]}")
         monkeypatch.delenv("no_proxy", raising=False)
         monkeypatch.delenv("NO_PROXY", raising=False)
+        # The opener is built at import; rebuild it under this environment.
+        MemilaBackend = importlib.reload(memila).MemilaBackend
         MemilaBackend(f"http://127.0.0.1:{real.server_address[1]}").recall("q", "ns", 1)
         assert hits == ["/retrieve"]  # an absolute-URL path would mean the proxy got it
     finally:
