@@ -78,3 +78,15 @@ def test_f7_3_cli_harness_still_wins(cfg, tmp_path, monkeypatch):
     monkeypatch.chdir(proj)
     out = run_hook(monkeypatch, json.dumps({"cwd": str(proj)}), "--harness", "claude-code")
     assert "hookSpecificOutput" in out
+
+
+def test_f7_3_payload_project_harness_is_used_when_the_process_is_elsewhere(cfg, tmp_path, monkeypatch):
+    seed(cfg)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    f = proj / ".nimblemind.toml"
+    f.write_text('harness = "generic"\n', encoding="utf-8")
+    config_mod.trust(f)
+    monkeypatch.chdir(tmp_path)  # not the project: the first guess is claude-code
+    out = run_hook(monkeypatch, json.dumps({"cwd": str(proj)}))
+    assert "private core" in out and "hookSpecificOutput" not in out  # generic prints plain text
