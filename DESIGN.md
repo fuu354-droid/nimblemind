@@ -237,9 +237,10 @@ Nothing else in the package calls `Backend.store`.
   read from the user config or the environment: their locations are chosen
   by variables (`MEMILA_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, `HOME`) an agent can
   set on its own command line, so an `allow` read from either is one the
-  agent can grant itself. The grants file sits in the data home, so moving it
-  moves the store with it, and an agent that points the data home elsewhere
-  only approves writes into a store no real session reads. The user config
+  agent can grant itself. The grants file sits in the data home, so with the
+  `local` backend moving it moves the store with it, and an agent that
+  points the data home elsewhere only approves writes into a store no real
+  session reads (a non-local backend: see the limits below). The user config
   and a project config can set `ask` or `deny` (tightening); an `allow`
   there is ignored and named on stderr.
 - `memila-brain pending list|show <id>|approve <id>...|reject <id>...`.
@@ -269,11 +270,20 @@ Nothing else in the package calls `Backend.store`.
   exits non-zero. That is what makes approval verifiable rather than asserted.
 - The approval sits after isolation on purpose: a person is never asked to
   approve something the gate would refuse anyway.
-- Limits, stated rather than implied: everything above defends against an
-  agent driving this CLI, not against a process running as the same user
-  that edits the data home's files directly, or that fabricates a terminal
-  (a pty wrapper). Those need operating system separation, which a
-  same-user tool cannot provide.
+- Limits, stated rather than implied: everything above constrains what this
+  CLI does, and it fully protects a store only when the store lives in the
+  data home (the `local` backend). It does not defend against a process
+  running as the same user that edits the data home's files directly
+  (including through symlinks), or that fabricates a terminal (a pty
+  wrapper).
+- With a non-local backend the store lives outside the data home, so a
+  same-user agent can reach it without this CLI at all: it can read the
+  backend's URL and key from the user's own files and send a write directly,
+  or point this CLI at a data home it controls. Approval here then
+  constrains only this CLI's own writes. Protecting a shared remote store
+  takes enforcement in the service on its write endpoint (`memila-brain
+  serve`, section 10, or the backend itself), which is the same server-side
+  rule section 8 states for isolation.
 
 ## 8. Isolation check
 
