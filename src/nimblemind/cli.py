@@ -226,7 +226,7 @@ def cmd_recall(args) -> int:
     cfg = _cfg(args)
     try:
         hits = writes.recall_backend(cfg).recall(args.query, cfg.namespace, args.k)
-    except BackendError as e:
+    except Exception as e:  # BackendError, or anything a plugin backend raises
         _out(args, {"state": f"unavailable({e})", "hits": []}, f"unavailable: {e}")
         return 1
     _out(args, {"state": "ok" if hits else "empty", "hits": [h.to_dict() for h in hits]},
@@ -330,12 +330,15 @@ def cmd_held(args) -> int:
             f"== {e['id']} ({e['verdict']}: {e['report']})\n{e['record']['content']}"
             for e in shown))
         return 0 if shown else 1
+    unknown = [i for i in args.ids if i not in {e["id"] for e in items}]
+    for i in unknown:
+        say(f"FAIL {i}: no held entry")
     for e in items:
         if e["id"] in args.ids:
             if args.action == "discard":
                 (cfg.layout().held / e["_file"]).unlink(missing_ok=True)
                 say(f"discarded {e['id']}")
-    return 0
+    return 1 if unknown else 0
 
 
 def cmd_approval(args) -> int:

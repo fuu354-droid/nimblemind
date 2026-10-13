@@ -96,8 +96,8 @@ def _store(cfg, rec: Record) -> str:
         # Still must not escape: the approval has yet to be logged. Say so
         # instead, so the person can repair the retry list and resend.
         return (f"stored locally; backend send failed ({sent_error}) and the retry list "
-                f"could not be updated ({type(e).__name__}: {e}); repair it, then "
-                "`nimblemind flush`")
+                f"could not be updated ({type(e).__name__}: {e}); repair it, add "
+                f"{json.dumps(rec.source_id)} to it, then `nimblemind flush`")
     return (f"stored locally; backend send failed ({sent_error}), "
             "`nimblemind flush` retries it")
 
