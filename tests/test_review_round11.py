@@ -91,3 +91,15 @@ def test_broken_config_in_the_process_dir_does_not_silence_a_valid_payload(cfg, 
     monkeypatch.setattr(sys, "stdout", out)
     assert cli.main(["hook", "session-start"]) == 0
     assert "core" in out.getvalue()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX PATH semantics")
+def test_f11_1_which_refuses_a_relative_result_from_a_dot_path_entry(tmp_path, monkeypatch):
+    from nimblemind.fsutil import which
+
+    exe = tmp_path / "planted-tool"
+    exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", ".")
+    assert which("planted-tool") is None
