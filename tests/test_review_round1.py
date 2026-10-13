@@ -163,12 +163,13 @@ def test_f11_long_namespace_is_a_bounded_unique_component(cfg, user_config):
 def test_audit_sees_a_record_the_index_lost(cfg):
     c = cfg()
     writes.write(c, "cli", "note", "x", source_id="note:1", approved_by="t")
-    (c.layout().records / "index.json").write_text('{"version": 1, "records": {}}', encoding="utf-8")
     writes.canonical(c).store(Record("note:2", "default", "note", "unapproved"))
-    idx = json.loads((c.layout().records / "index.json").read_text(encoding="utf-8"))
-    assert "note:1" not in idx["records"]
-    problems = writes.audit(c)
-    assert problems == ["note:2: stored with no approval entry"]
+    index_file = c.layout().records / "index.json"
+    idx = json.loads(index_file.read_text(encoding="utf-8"))
+    del idx["records"]["note:2"]
+    index_file.write_text(json.dumps(idx), encoding="utf-8")
+    assert [r.source_id for r in writes.canonical(c).list("default")] == ["note:1"]
+    assert writes.audit(c) == ["note:2: stored with no approval entry"]
 
 
 def test_bracketed_ipv6_forbidden_entry_matches():
