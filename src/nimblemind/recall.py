@@ -14,8 +14,8 @@ stored records, never `pending/` or `held/`.
 
 from __future__ import annotations
 
-from memila_brain import journal, writes
-from memila_brain.backends import BackendError
+from nimblemind import journal, writes
+from nimblemind.backends import BackendError
 
 RECALL_QUERY = "unfinished work next steps blockers decisions pitfalls"
 
@@ -29,7 +29,7 @@ def _cut(text: str, limit: int) -> tuple[str, bool]:
 
 
 def label(cfg) -> str:
-    return f"[memila-brain {cfg.namespace}]"
+    return f"[nimblemind {cfg.namespace}]"
 
 
 def latest_journal(cfg):
@@ -81,7 +81,7 @@ def assemble(cfg) -> str:
         if recall_text:
             parts.append("Earlier sessions:\n" + recall_text)
         if notes:
-            parts.append("[memila-brain: " + "; ".join(notes) + "]")
+            parts.append("[nimblemind: " + "; ".join(notes) + "]")
         return "\n\n".join(parts)
 
     total = b["total_chars"]

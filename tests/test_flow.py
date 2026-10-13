@@ -8,11 +8,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from memila_brain import cli, distill, migrate, recall, writes
-from memila_brain import config as config_mod
-from memila_brain.backends.memila import MemilaBackend, is_forbidden
-from memila_brain.backends import BackendError
-from memila_brain.records import Record
+from nimblemind import cli, distill, migrate, recall, writes
+from nimblemind import config as config_mod
+from nimblemind.backends.memila import MemilaBackend, is_forbidden
+from nimblemind.backends import BackendError
+from nimblemind.records import Record
 from conftest import toml_list
 
 SECTIONS = ["Decisions", "Rulings", "Pitfalls", "Unfinished", "Lessons learned", "Improvements found"]
@@ -52,7 +52,7 @@ def test_distill_allow_rule_stores_and_recall_shows_it(tmp_path, user_config, fa
     c = cfg()
     assert distill.distill(c, str(transcript(tmp_path)), "s1") == "stored"
     out = recall.assemble(c)
-    assert "resume the hook wiring" in out and out.startswith("[memila-brain default]")
+    assert "resume the hook wiring" in out and out.startswith("[nimblemind default]")
     log = (c.layout().approvals).read_text(encoding="utf-8")
     assert '"rule": "allow"' in log and "approval.toml#distill" in log
 
@@ -73,13 +73,13 @@ def test_journal_language_and_banned_chars(tmp_path, user_config, fake_model, cf
     bad = journal_text("- finish 中文 — now")
     user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(bad))}\n'
                 '[journal]\nlanguage = "English"\nbanned_chars = ["—"]\n')
-    from memila_brain import journal
+    from nimblemind import journal
     found = journal.problems(cfg(), bad)
     assert any("CJK" in p for p in found) and any("banned" in p for p in found)
 
 
 def test_cjk_allowed_when_no_language_rule(cfg):
-    from memila_brain import journal
+    from nimblemind import journal
     assert journal.problems(cfg(), journal_text("- 繼續")) == []
 
 
@@ -119,10 +119,10 @@ def test_session_end_hook_skips_inside_a_child(tmp_path, monkeypatch):
     monkeypatch.setattr(distill, "spawn", lambda *a: called.append(a))
     payload = json.dumps({"transcript_path": str(transcript(tmp_path)), "session_id": "s",
                           "cwd": str(tmp_path)})
-    monkeypatch.setenv("MEMILA_BRAIN_CHILD", "1")
+    monkeypatch.setenv("NIMBLEMIND_CHILD", "1")
     run_cli(["hook", "session-end"], payload)
     assert called == []
-    monkeypatch.delenv("MEMILA_BRAIN_CHILD")
+    monkeypatch.delenv("NIMBLEMIND_CHILD")
     run_cli(["hook", "session-end"], payload)
     assert len(called) == 1
 
@@ -239,6 +239,6 @@ def test_migrate_imports_plain_and_holds_marked(tmp_path, cfg):
 def test_distill_hook_itself_refuses_inside_a_child(tmp_path, monkeypatch, cfg):
     called = []
     monkeypatch.setattr(distill, "spawn", lambda *a: called.append(a))
-    monkeypatch.setenv("MEMILA_BRAIN_CHILD", "1")
+    monkeypatch.setenv("NIMBLEMIND_CHILD", "1")
     distill.hook(cfg(), {"transcript_path": str(transcript(tmp_path)), "session_id": "s"})
     assert called == []

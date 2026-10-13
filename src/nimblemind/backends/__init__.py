@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib
 from typing import Protocol, runtime_checkable
 
-from memila_brain.records import Evidence, Record
+from nimblemind.records import Evidence, Record
 
 
 class BackendError(RuntimeError):
@@ -35,11 +35,11 @@ def load(cfg) -> Backend:
     spec = cfg["backend"]
     name = spec.get("name", "local")
     if name == "local":
-        from memila_brain.backends.local import LocalBackend
+        from nimblemind.backends.local import LocalBackend
 
         return LocalBackend(cfg.layout().home)
     if name == "memila":
-        from memila_brain.backends.memila import MemilaBackend
+        from nimblemind.backends.memila import MemilaBackend
 
         return MemilaBackend.from_config(spec)
     if name == "plugin":

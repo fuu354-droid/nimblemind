@@ -20,9 +20,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from memila_brain import paths
-from memila_brain.fsutil import atomic_write, file_lock, read_text
-from memila_brain.records import Evidence, Record
+from nimblemind import paths
+from nimblemind.fsutil import atomic_write, file_lock, read_text
+from nimblemind.records import Evidence, Record
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 

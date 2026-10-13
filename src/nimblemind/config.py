@@ -3,7 +3,7 @@
 
 Layers, lowest first: built-in defaults, the user config file, the project
 config found from the session's directory, then environment variables
-(`MEMILA_BRAIN_<SECTION>_<KEY>`). Two exceptions: environment values for the
+(`NIMBLEMIND_<SECTION>_<KEY>`). Two exceptions: environment values for the
 narrowing sections apply at the user's level, so a project still narrows
 them, and `approval` is never read from the environment at all.
 
@@ -17,7 +17,7 @@ not trusted the way the user's own file is:
 - Every key that runs a command, loads code, chooses where data is sent or
   which memory pool a session reads (`namespace`, `backend`, the distiller and
   researcher commands, the isolation command, `curiosity.after_run`) applies
-  only once the person has trusted that exact file with `memila-brain trust`.
+  only once the person has trusted that exact file with `nimblemind trust`.
   Trust is recorded by content hash, so editing the file, or pulling a
   change to it, drops the trust until it is given again.
 """
@@ -32,8 +32,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from memila_brain import paths
-from memila_brain.fsutil import atomic_write, read_text
+from nimblemind import paths
+from nimblemind.fsutil import atomic_write, read_text
 
 APPROVAL_PATHS = ("distill", "research", "gap", "provider", "cli")
 APPROVAL_LEVELS = ("deny", "ask", "allow")  # strictest first
@@ -70,9 +70,9 @@ TRUST_REQUIRED = (
 )
 NARROWING = ("approval", "budget", "isolation")
 
-# Environment overrides for scalar keys: MEMILA_BRAIN_<SECTION>_<KEY>, or
-# MEMILA_BRAIN_<KEY> for a top-level one. Applied at the user layer.
-ENV_PREFIX = "MEMILA_BRAIN_"
+# Environment overrides for scalar keys: NIMBLEMIND_<SECTION>_<KEY>, or
+# NIMBLEMIND_<KEY> for a top-level one. Applied at the user layer.
+ENV_PREFIX = "NIMBLEMIND_"
 
 
 class ConfigError(ValueError):
@@ -136,7 +136,7 @@ def _env_layer(defaults: dict, sections: tuple[str, ...] | None) -> dict:
     `approval` is never read from the environment: an agent can set a
     variable on its own command line, and an approval it can grant itself is
     no approval (DESIGN.md section 7). The only scripted way to `allow` a
-    path is a standing grant from `memila-brain approval allow`.
+    path is a standing grant from `nimblemind approval allow`.
     """
     layer: dict = {}
     for key, value in defaults.items():
@@ -155,7 +155,7 @@ def _env_layer(defaults: dict, sections: tuple[str, ...] | None) -> dict:
                                           + f": not a valid value: {raw!r}") from None
         elif not isinstance(value, list):
             raw = os.environ.get(f"{ENV_PREFIX}{key}".upper())
-            # MEMILA_BRAIN_HOME and _CONFIG are locations, not config keys.
+            # NIMBLEMIND_HOME and _CONFIG are locations, not config keys.
             if raw is not None and key not in ("home", "config"):
                 layer[key] = _coerce(raw, value)
     return layer
@@ -228,9 +228,9 @@ def _validate(data: dict) -> None:
 # ---- approval grants -----------------------------------------------------
 #
 # An `allow` lives only in <data home>/approval.toml, written by
-# `memila-brain approval allow <path>` at a terminal. Not in the user config:
+# `nimblemind approval allow <path>` at a terminal. Not in the user config:
 # the user config's location is chosen by environment variables
-# (MEMILA_BRAIN_CONFIG, XDG_CONFIG_HOME, HOME) that an agent can set on its
+# (NIMBLEMIND_CONFIG, XDG_CONFIG_HOME, HOME) that an agent can set on its
 # own command line, so an `allow` read from there is an approval the agent can
 # grant itself. The grants file sits in the data home instead, so moving it
 # also moves the store: an agent that points the data home elsewhere only
@@ -250,7 +250,7 @@ def set_grant(path: str, allowed: bool) -> set[str]:
         raise ConfigError(f"unknown write path {path!r}; expected one of {APPROVAL_PATHS}")
     current = grants()
     current = current | {path} if allowed else current - {path}
-    body = ("# Written by `memila-brain approval`. Each path listed here stores\n"
+    body = ("# Written by `nimblemind approval`. Each path listed here stores\n"
             "# its writes without asking. Edit only through that command.\n"
             f"allow = [{', '.join(repr(p).replace(chr(39), chr(34)) for p in sorted(current))}]\n")
     atomic_write(grants_file(), body)
@@ -324,7 +324,7 @@ def load(cwd: Path | str | None = None) -> Config:
     for p, level in (user_approval.items() if isinstance(user_approval, dict) else []):
         if level == "allow":
             notes.append(f"{paths.user_config()}: approval.{p} = \"allow\" ignored; "
-                         f"grant it with `memila-brain approval allow {p}`")
+                         f"grant it with `nimblemind approval allow {p}`")
             continue
         data["approval"][p] = level
     for p in grants():
@@ -353,7 +353,7 @@ def load(cwd: Path | str | None = None) -> Config:
             dropped = [k for k in TRUST_REQUIRED if _strip(project, k)]
             if dropped:
                 notes.append(f"{project_file}: not trusted, ignored {', '.join(dropped)} "
-                              f"(run `memila-brain trust {project_file}`)")
+                              f"(run `nimblemind trust {project_file}`)")
         narrowing = {k: project.pop(k) for k in NARROWING if k in project}
         bad = [k for k, v in narrowing.items() if not isinstance(v, dict)]
         if bad:

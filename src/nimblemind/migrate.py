@@ -14,9 +14,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from memila_brain import approval, isolation, writes
-from memila_brain.fsutil import read_text
-from memila_brain.records import Record
+from nimblemind import approval, isolation, writes
+from nimblemind.fsutil import read_text
+from nimblemind.records import Record
 
 MARKS = (".quarantine.md", ".unscanned.md")
 

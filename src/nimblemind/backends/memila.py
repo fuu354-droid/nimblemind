@@ -22,8 +22,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from memila_brain.backends import BackendError
-from memila_brain.records import Evidence, Record
+from nimblemind.backends import BackendError
+from nimblemind.records import Evidence, Record
 
 DEFAULT_URL = "http://localhost:6452"
 ENV_FILE = Path.home() / ".config" / "memila.env"
@@ -150,5 +150,5 @@ class MemilaBackend:
 
     def list(self, namespace: str) -> list[Record]:
         # memila has no listing endpoint. The canonical local copy that every
-        # write keeps (writes.py) is what `memila-brain list` reads instead.
+        # write keeps (writes.py) is what `nimblemind list` reads instead.
         raise BackendError("the memila backend cannot list records; the canonical local copy can")

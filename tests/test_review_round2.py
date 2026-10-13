@@ -9,15 +9,15 @@ import threading
 
 import pytest
 
-from memila_brain import config as config_mod
-from memila_brain import recall, writes
-from memila_brain.records import Record
+from nimblemind import config as config_mod
+from nimblemind import recall, writes
+from nimblemind.records import Record
 
 
 def test_f2_1_allow_in_a_config_the_agent_chose_is_ignored(cfg, tmp_path, monkeypatch):
     agent_cfg = tmp_path / "agent.toml"
     agent_cfg.write_text('[approval]\ncli = "allow"\n', encoding="utf-8")
-    monkeypatch.setenv("MEMILA_BRAIN_CONFIG", str(agent_cfg))
+    monkeypatch.setenv("NIMBLEMIND_CONFIG", str(agent_cfg))
     c = cfg()
     assert c["approval"]["cli"] == "ask"
     assert any("ignored" in n for n in c.notes)
@@ -31,7 +31,7 @@ def test_f2_1_user_config_can_still_tighten(cfg, user_config):
 
 
 def test_f2_1_grant_needs_a_terminal():
-    r = subprocess.run([sys.executable, "-m", "memila_brain", "approval", "allow", "cli"],
+    r = subprocess.run([sys.executable, "-m", "nimblemind", "approval", "allow", "cli"],
                        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
     assert r.returncode != 0 and "terminal" in r.stderr
     assert config_mod.grants() == set()
@@ -62,7 +62,7 @@ def test_f2_2_audit_catches_a_kind_change_after_storing(cfg):
 
 
 def test_f2_3_trust_is_checked_on_the_bytes_that_are_parsed(tmp_path, monkeypatch):
-    f = tmp_path / ".memila-brain.toml"
+    f = tmp_path / ".nimblemind.toml"
     f.write_text('namespace = "good"\n', encoding="utf-8")
     config_mod.trust(f)
     evil = b'namespace = "evil"\n'
@@ -72,7 +72,7 @@ def test_f2_3_trust_is_checked_on_the_bytes_that_are_parsed(tmp_path, monkeypatc
     def swapping_read(self):
         calls.append(self)
         data = real_read(self)
-        if self.name == ".memila-brain.toml":
+        if self.name == ".nimblemind.toml":
             f.write_bytes(evil)  # swapped right after this read
         return data
 
@@ -87,7 +87,7 @@ def test_f2_4_hooks_survive_a_closed_stdin():
     for event in ("session-start", "session-end"):
         r = subprocess.run([sys.executable, "-c",
                             "import os, sys; os.close(0); sys.stdin = None; "
-                            "from memila_brain.cli import main; raise SystemExit(main(['hook', '%s']))" % event],
+                            "from nimblemind.cli import main; raise SystemExit(main(['hook', '%s']))" % event],
                            capture_output=True, text=True, timeout=60)
         assert (r.returncode, r.stdout, r.stderr) == (0, "", ""), event
 
@@ -104,14 +104,14 @@ def test_approved_entry_cannot_be_replayed(cfg):
 
 
 def test_negative_project_budget_is_ignored(tmp_path):
-    (tmp_path / ".memila-brain.toml").write_text("[budget]\ntotal_chars = -5\n", encoding="utf-8")
+    (tmp_path / ".nimblemind.toml").write_text("[budget]\ntotal_chars = -5\n", encoding="utf-8")
     assert config_mod.load(tmp_path)["budget"]["total_chars"] == 6000
 
 
 def test_memila_ignores_proxy_environment(monkeypatch):
     import importlib
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from memila_brain.backends import memila
+    from nimblemind.backends import memila
 
     hits = []
 

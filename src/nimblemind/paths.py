@@ -11,8 +11,8 @@ import os
 import sys
 from pathlib import Path
 
-APP = "memila-brain"
-PROJECT_CONFIG = ".memila-brain.toml"
+APP = "nimblemind"
+PROJECT_CONFIG = ".nimblemind.toml"
 # Longest escaped namespace kept verbatim in a path component. Short enough
 # that the deepest file under a namespace stays far below Windows' 260
 # character path limit from any ordinary data home.
@@ -26,7 +26,7 @@ def _env_path(name: str) -> Path | None:
 
 def data_home() -> Path:
     """The data home: records, pending and held writes, logs, locks."""
-    explicit = _env_path("MEMILA_BRAIN_HOME")
+    explicit = _env_path("NIMBLEMIND_HOME")
     if explicit:
         return explicit
     if sys.platform == "win32":
@@ -40,7 +40,7 @@ def data_home() -> Path:
 
 def user_config() -> Path:
     """The user config file. It may not exist; defaults then apply."""
-    explicit = _env_path("MEMILA_BRAIN_CONFIG")
+    explicit = _env_path("NIMBLEMIND_CONFIG")
     if explicit:
         return explicit
     if sys.platform == "win32":
@@ -53,7 +53,7 @@ def user_config() -> Path:
 
 
 def find_project_config(start: Path | str | None) -> Path | None:
-    """The nearest `.memila-brain.toml` at or above `start`, or None.
+    """The nearest `.nimblemind.toml` at or above `start`, or None.
 
     A relative or missing start finds nothing: resolving it would resolve
     against this process's own directory, which is not the session's.

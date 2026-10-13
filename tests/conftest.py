@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from memila_brain import config as config_mod
+from nimblemind import config as config_mod
 
 
 def toml_list(items) -> str:
@@ -20,14 +20,14 @@ def isolated_env(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv("MEMILA_BRAIN_HOME", str(tmp_path / "data"))
-    monkeypatch.setenv("MEMILA_BRAIN_CONFIG", str(tmp_path / "user.toml"))
+    monkeypatch.setenv("NIMBLEMIND_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("NIMBLEMIND_CONFIG", str(tmp_path / "user.toml"))
     for k in list(os.environ):
-        if k.startswith(("MEMILA_URL", "MEMILA_API_KEY", "MEMILA_BRAIN_CHILD")):
+        if k.startswith(("MEMILA_URL", "MEMILA_API_KEY", "NIMBLEMIND_CHILD")):
             monkeypatch.delenv(k, raising=False)
-        if k.startswith("MEMILA_BRAIN_") and k not in ("MEMILA_BRAIN_HOME", "MEMILA_BRAIN_CONFIG"):
+        if k.startswith("NIMBLEMIND_") and k not in ("NIMBLEMIND_HOME", "NIMBLEMIND_CONFIG"):
             monkeypatch.delenv(k, raising=False)
-    from memila_brain.backends import memila
+    from nimblemind.backends import memila
 
     monkeypatch.setattr(memila, "ENV_FILE", home / ".config" / "memila.env")
     yield

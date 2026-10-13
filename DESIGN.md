@@ -1,4 +1,4 @@
-# memila-brain: design
+# nimblemind: design
 
 Session memory and a curiosity queue for AI coding agents, as a standalone
 package. Extracted from a private workspace's `brain` and `curiosity` scripts
@@ -37,12 +37,12 @@ Non-goals, ruled in the origin task:
 ## 2. Runtime and packaging
 
 - Python 3.12 or newer, standard library only. Installed with
-  `uv tool install memila-brain` (or `pipx install`), which provisions 3.12
+  `uv tool install nimblemind` (or `pipx install`), which provisions 3.12
   into an isolated environment on any platform, so the system python's
   version never matters: the console script's own launcher points at that
   environment, and the hooks call nothing else.
-- One package, `memila_brain`, one console script, `memila-brain`, and
-  `python -m memila_brain` as the equivalent for hosts where the scripts
+- One package, `nimblemind`, one console script, `nimblemind`, and
+  `python -m nimblemind` as the equivalent for hosts where the scripts
   directory is not on `PATH`.
 - No shell wrapper. Every hook command is the console script itself, so the
   same command line works under bash, zsh, PowerShell and cmd.
@@ -60,9 +60,9 @@ default.
 
 | what | env var | platform default |
 |---|---|---|
-| data home | `MEMILA_BRAIN_HOME` | Linux: `$XDG_DATA_HOME/memila-brain` (`~/.local/share/memila-brain`); macOS: `~/Library/Application Support/memila-brain`; Windows: `%LOCALAPPDATA%\memila-brain` |
-| user config | `MEMILA_BRAIN_CONFIG` | Linux: `$XDG_CONFIG_HOME/memila-brain/config.toml` (`~/.config/...`); macOS: same directory as data home; Windows: `%APPDATA%\memila-brain\config.toml` |
-| project config | none | `.memila-brain.toml`, found by walking up from the session's working directory, stopping at the filesystem root |
+| data home | `NIMBLEMIND_HOME` | Linux: `$XDG_DATA_HOME/nimblemind` (`~/.local/share/nimblemind`); macOS: `~/Library/Application Support/nimblemind`; Windows: `%LOCALAPPDATA%\nimblemind` |
+| user config | `NIMBLEMIND_CONFIG` | Linux: `$XDG_CONFIG_HOME/nimblemind/config.toml` (`~/.config/...`); macOS: same directory as data home; Windows: `%APPDATA%\nimblemind\config.toml` |
+| project config | none | `.nimblemind.toml`, found by walking up from the session's working directory, stopping at the filesystem root |
 
 Data home layout:
 
@@ -95,7 +95,7 @@ names Windows reserves.
 TOML, read with the standard library's `tomllib`, so a person can comment a
 hand-written config and no third-party parser is needed.
 Precedence, lowest first: built-in defaults, user config, project config,
-environment variables (`MEMILA_BRAIN_<SECTION>_<KEY>`, for scalar keys only).
+environment variables (`NIMBLEMIND_<SECTION>_<KEY>`, for scalar keys only).
 Environment values for the narrowing sections apply at the user's level, so
 a project still narrows them, and `approval` is never read from the
 environment.
@@ -110,7 +110,7 @@ not trusted the way the user's own file is:
   which memory pool a session reads (`namespace`, `harness`, `backend`, the
   distiller and researcher, `isolation.command`, `curiosity.gaps_file` and
   `curiosity.after_run`) applies only once a person has trusted that exact
-  file with `memila-brain trust`, at a terminal, which records the hash of
+  file with `nimblemind trust`, at a terminal, which records the hash of
   the bytes it showed. Loading reads the file once and checks that same
   read's hash, so an edit, a pulled change or a swap drops trust until it is
   given again. An untrusted file's other keys still apply, and the dropped ones are
@@ -202,7 +202,7 @@ Backends:
 Every stored record keeps a canonical copy in the local record store,
 whatever backend is configured, so listing, auditing and rebuilding never
 depend on a server. A non-local backend receives the record as well; a
-failed send is listed in `unsynced.json` and `memila-brain flush` retries it.
+failed send is listed in `unsynced.json` and `nimblemind flush` retries it.
 Records are ordered by a microsecond creation stamp, so "the newest journal"
 is well defined even for two writes inside one second.
 
@@ -221,7 +221,7 @@ Nothing else in the package calls `Backend.store`.
    `allow`: step 3, then an approval entry naming the grant.
 3. Storage: the canonical local copy, then the configured backend when it
    is not `local`. A failure of that second send leaves the record stored
-   locally and listed for `memila-brain flush`.
+   locally and listed for `nimblemind flush`.
 
 `pending/` and `held/` are never read by recall, on any backend.
 
@@ -232,10 +232,10 @@ Nothing else in the package calls `Backend.store`.
   being in the background; only a person's command or a standing grant for
   that exact path stores anything.
 - `allow` is a standing grant, and it lives only in `<home>/approval.toml`,
-  written by `memila-brain approval allow <path>` at a terminal
+  written by `nimblemind approval allow <path>` at a terminal
   (`approval revoke` removes it, `approval show` lists the levels). It is not
   read from the user config or the environment: their locations are chosen
-  by variables (`MEMILA_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, `HOME`) an agent can
+  by variables (`NIMBLEMIND_CONFIG`, `XDG_CONFIG_HOME`, `HOME`) an agent can
   set on its own command line, so an `allow` read from either is one the
   agent can grant itself. The grants file sits in the data home, so with the
   `local` backend moving it moves the store with it, and an agent that
@@ -243,7 +243,7 @@ Nothing else in the package calls `Backend.store`.
   session reads (a non-local backend: see the limits below). The user config
   and a project config can set `ask` or `deny` (tightening); an `allow`
   there is ignored and named on stderr.
-- `memila-brain pending list|show <id>|approve <id>...|reject <id>...`.
+- `nimblemind pending list|show <id>|approve <id>...|reject <id>...`.
 - Every command that approves or widens approval (`pending approve`,
   `store --approve`, `migrate`, `approval allow`, `trust`) reads a typed
   `yes` from an interactive terminal and refuses without one. An agent
@@ -264,7 +264,7 @@ Nothing else in the package calls `Backend.store`.
   for a command, or `grant:<home>/approval.toml#<path>` for a standing grant.
   The line is written after the record is stored, so a crash between the two
   leaves a record `audit` reports, never an approval for nothing.
-- `memila-brain audit` verifies every record file on disk (not the index)
+- `nimblemind audit` verifies every record file on disk (not the index)
   against the log: a record with no entry, whose hash differs from its entry,
   or a file that is not a readable record of its namespace, is reported and
   exits non-zero. That is what makes approval verifiable rather than asserted.
@@ -281,7 +281,7 @@ Nothing else in the package calls `Backend.store`.
   backend's URL and key from the user's own files and send a write directly,
   or point this CLI at a data home it controls. Approval here then
   constrains only this CLI's own writes. Protecting a shared remote store
-  takes enforcement in the service on its write endpoint (`memila-brain
+  takes enforcement in the service on its write endpoint (`nimblemind
   serve`, section 10, or the backend itself), which is the same server-side
   rule section 8 states for isolation.
 
@@ -302,7 +302,7 @@ Nothing else in the package calls `Backend.store`.
   package knowing its layout.
 
 The same checks run on every path. A multi-client deployment runs them in
-the service on its write endpoint (`memila-brain serve`, section 10), not in
+the service on its write endpoint (`nimblemind serve`, section 10), not in
 each client.
 
 ## 9. Injection budget
@@ -310,7 +310,7 @@ each client.
 At session start the package injects one block, assembled in this order and
 counted together against `budget.total_chars`:
 
-1. The source label line, `[memila-brain <namespace>]`, which counts.
+1. The source label line, `[nimblemind <namespace>]`, which counts.
 2. Core memory: the newest approved journal, capped at `core_chars`.
 3. Recall: up to `k` older records' `recall_sections`, capped at
    `recall_chars`.
@@ -327,10 +327,10 @@ above `total_chars`, and config validation refuses that.
 
 Harness hooks, chosen by `harness`:
 
-- `memila-brain hook session-start`: recall, prints the harness's injection
+- `nimblemind hook session-start`: recall, prints the harness's injection
   format.
-- `memila-brain hook session-end`: detaches a distill process and returns.
-- `memila-brain hook prompt` (v0.2.0): per-prompt recall with the prompt as
+- `nimblemind hook session-end`: detaches a distill process and returns.
+- `nimblemind hook prompt` (v0.2.0): per-prompt recall with the prompt as
   the query, capped at `budget.prompt_chars` (the origin workspace's
   `/augment` hook moves here, as a backend call).
 
@@ -342,11 +342,11 @@ Model calls go through `distiller.command` and `researcher.command`:
 `claude-cli` (the `claude -p` CLI with a model alias, never a dated build) or
 an `argv` list for any command that reads a prompt on stdin and prints
 text. Set to `none`, distill is skipped and journals come only from
-`memila-brain store`.
+`nimblemind store`.
 
-Outward API (the provider direction): `memila_brain.api` exposes `store`,
+Outward API (the provider direction): `nimblemind.api` exposes `store`,
 `recall`, `delete`, `gaps.add`, `gaps.list`, all routing writes through
-section 6. The CLI mirrors it with `--json`. `memila-brain serve` runs the same
+section 6. The CLI mirrors it with `--json`. `nimblemind serve` runs the same
 API over local HTTP for a multi-client setup, with isolation and approval
 enforced in the server. A Hermes memory provider built on this API is the
 first external integration test, under `integrations/hermes/`; it is a test,
@@ -354,11 +354,11 @@ not a dependency.
 
 ## 11. Curiosity
 
-- `memila-brain gap add "<q>" --confidence N [--context ...]`, `gap list`,
+- `nimblemind gap add "<q>" --confidence N [--context ...]`, `gap list`,
   `gap resolve`. Gaps live in `curiosity/<ns>/gaps.jsonl` unless
   `curiosity.gaps_file` names a project file. A gap add goes through the write
   path as path `gap`.
-- `memila-brain research [--max N]`: researches the lowest confidence open
+- `nimblemind research [--max N]`: researches the lowest confidence open
   gaps through `researcher.command`, under a cross-platform lock. Each answer
   is a write on path `research`. The answer is tagged as untrusted evidence in
   its stored text.
@@ -383,11 +383,11 @@ not a dependency.
    suite with `HOME` pointed at a temp directory and checking it afterwards).
 6. The origin workspace's hooks run on the package with its project config
    and pass its own suite.
-7. A Hermes-style provider stub stores and recalls through `memila_brain.api`.
+7. A Hermes-style provider stub stores and recalls through `nimblemind.api`.
 
 ## 13. Migration from the origin workspace
 
-`memila-brain migrate --from <dir>` imports journals and answers from an older
+`nimblemind migrate --from <dir>` imports journals and answers from an older
 layout (the origin's `~/.claude/brain/journals` and `~/.claude/curiosity`).
 Imported files already passed that workspace's gate, so each gets an approval
 entry with `rule: "migrated"` and its hash, and the source is left in place

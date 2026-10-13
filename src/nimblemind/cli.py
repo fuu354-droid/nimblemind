@@ -1,4 +1,4 @@
-"""The `memila-brain` command line.
+"""The `nimblemind` command line.
 
 Hook commands (`hook session-start`, `hook session-end`) always exit 0 and
 never print an error into the session: a failing memory tool must not turn
@@ -21,8 +21,8 @@ import json
 import sys
 from pathlib import Path
 
-from memila_brain import __version__, approval
-from memila_brain import config as config_mod
+from nimblemind import __version__, approval
+from nimblemind import config as config_mod
 
 
 class NotATerminal(SystemExit):
@@ -34,7 +34,7 @@ def confirm(question: str) -> str:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise NotATerminal(
             "this approves a write, which needs a person at a terminal; "
-            "run it in a terminal, or grant the path with `memila-brain approval allow <path>`")
+            "run it in a terminal, or grant the path with `nimblemind approval allow <path>`")
     answer = input(f"{question} Type yes to approve: ").strip().lower()
     if answer != "yes":
         raise SystemExit("not approved")
@@ -60,7 +60,7 @@ def _out(args, obj, text: str) -> None:
 # ---- hooks ---------------------------------------------------------------
 
 def cmd_hook(args) -> int:
-    from memila_brain import distill, harness, model, recall
+    from nimblemind import distill, harness, model, recall
 
     try:
         raw = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
@@ -81,9 +81,9 @@ def cmd_hook(args) -> int:
             distill.hook(cfg, payload)
     except Exception as e:  # never break the session; leave a trace instead
         try:
-            from memila_brain.fsutil import append_line
-            from memila_brain.paths import data_home
-            from memila_brain.records import now_iso
+            from nimblemind.fsutil import append_line
+            from nimblemind.paths import data_home
+            from nimblemind.records import now_iso
 
             append_line(data_home() / "logs" / "hook.log",
                         f"{now_iso()} {args.event}: {type(e).__name__}: {e}")
@@ -93,7 +93,7 @@ def cmd_hook(args) -> int:
 
 
 def cmd_distill(args) -> int:
-    from memila_brain import distill
+    from nimblemind import distill
 
     cfg = config_mod.load(args.cwd or None)
     try:
@@ -107,7 +107,7 @@ def cmd_distill(args) -> int:
 # ---- records -------------------------------------------------------------
 
 def cmd_store(args) -> int:
-    from memila_brain import writes
+    from nimblemind import writes
 
     cfg = _cfg(args)
     content = args.text if args.text is not None else sys.stdin.read()
@@ -121,8 +121,8 @@ def cmd_store(args) -> int:
 
 
 def cmd_recall(args) -> int:
-    from memila_brain import writes
-    from memila_brain.backends import BackendError
+    from nimblemind import writes
+    from nimblemind.backends import BackendError
 
     cfg = _cfg(args)
     try:
@@ -136,7 +136,7 @@ def cmd_recall(args) -> int:
 
 
 def cmd_list(args) -> int:
-    from memila_brain import writes
+    from nimblemind import writes
 
     cfg = _cfg(args)
     recs = writes.canonical(cfg).list(cfg.namespace)
@@ -146,9 +146,9 @@ def cmd_list(args) -> int:
 
 
 def cmd_delete(args) -> int:
-    from memila_brain import writes
+    from nimblemind import writes
 
-    from memila_brain.backends import BackendError
+    from nimblemind.backends import BackendError
 
     cfg = _cfg(args)
     try:
@@ -163,7 +163,7 @@ def cmd_delete(args) -> int:
 # ---- approval ------------------------------------------------------------
 
 def cmd_pending(args) -> int:
-    from memila_brain import writes
+    from nimblemind import writes
 
     cfg = _cfg(args)
     if args.action == "list":
@@ -210,7 +210,7 @@ def cmd_pending(args) -> int:
 
 
 def cmd_held(args) -> int:
-    from memila_brain import writes
+    from nimblemind import writes
 
     cfg = _cfg(args)
     items = writes.held(cfg)
@@ -230,7 +230,7 @@ def cmd_held(args) -> int:
 
 
 def cmd_approval(args) -> int:
-    from memila_brain.config import APPROVAL_PATHS
+    from nimblemind.config import APPROVAL_PATHS
 
     cfg = _cfg(args)
     if args.action == "show":
@@ -249,7 +249,7 @@ def cmd_approval(args) -> int:
 
 
 def cmd_audit(args) -> int:
-    from memila_brain import writes
+    from nimblemind import writes
 
     cfg = _cfg(args)
     problems = writes.audit(cfg)
@@ -258,7 +258,7 @@ def cmd_audit(args) -> int:
 
 
 def cmd_flush(args) -> int:
-    from memila_brain import writes
+    from nimblemind import writes
 
     cfg = _cfg(args)
     sent, left = writes.flush(cfg)
@@ -271,9 +271,9 @@ def cmd_flush(args) -> int:
 def cmd_trust(args) -> int:
     path = Path(args.path).resolve() if args.path else None
     if path and path.is_dir():
-        path = path / ".memila-brain.toml"
+        path = path / ".nimblemind.toml"
     if path is None:
-        from memila_brain.paths import find_project_config
+        from nimblemind.paths import find_project_config
 
         path = find_project_config(Path.cwd())
     if not path or not path.is_file():
@@ -293,7 +293,7 @@ def cmd_trust(args) -> int:
 
 
 def cmd_config(args) -> int:
-    from memila_brain import paths
+    from nimblemind import paths
 
     cfg = _cfg(args)
     _out(args, {"data_home": str(paths.data_home()), "user_config": str(paths.user_config()),
@@ -307,7 +307,7 @@ def cmd_config(args) -> int:
 
 
 def cmd_migrate(args) -> int:
-    from memila_brain import migrate
+    from nimblemind import migrate
 
     cfg = _cfg(args)
     if not args.dry_run:
@@ -320,8 +320,8 @@ def cmd_migrate(args) -> int:
 # ---- parser --------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="memila-brain", description=__doc__.split("\n\n")[0])
-    ap.add_argument("--version", action="version", version=f"memila-brain {__version__}")
+    ap = argparse.ArgumentParser(prog="nimblemind", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--version", action="version", version=f"nimblemind {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def common(p, json_flag=True):

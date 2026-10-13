@@ -7,7 +7,7 @@ its answer: `argv = ["ollama", "run", "llama3"]`, a wrapper script, anything.
 `command = "none"` turns the step off.
 
 The child runs in the system temp directory, outside any project, with
-`MEMILA_BRAIN_CHILD=1` set, so a child Claude Code session's own hooks see it
+`NIMBLEMIND_CHILD=1` set, so a child Claude Code session's own hooks see it
 and do not distill or recall recursively.
 """
 
@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-CHILD_ENV = "MEMILA_BRAIN_CHILD"
+CHILD_ENV = "NIMBLEMIND_CHILD"
 
 
 class ModelError(RuntimeError):

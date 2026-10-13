@@ -20,12 +20,12 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
-from memila_brain import approval, isolation
-from memila_brain import backends as backends_mod
-from memila_brain.backends.local import LocalBackend
-from memila_brain.config import APPROVAL_PATHS
-from memila_brain.fsutil import append_line, atomic_write, file_lock, read_text
-from memila_brain.records import Record, now_iso, sha256
+from nimblemind import approval, isolation
+from nimblemind import backends as backends_mod
+from nimblemind.backends.local import LocalBackend
+from nimblemind.config import APPROVAL_PATHS
+from nimblemind.fsutil import append_line, atomic_write, file_lock, read_text
+from nimblemind.records import Record, now_iso, sha256
 
 STORED, PENDING, HELD, REJECTED = "stored", "pending", "held", "rejected"
 
@@ -86,7 +86,7 @@ def _store(cfg, rec: Record) -> str:
         return ""
     except backends_mod.BackendError as e:
         _mark_unsynced(cfg, rec.source_id, rec.namespace)
-        return f"stored locally; {idx.name} send failed ({e}), `memila-brain flush` retries it"
+        return f"stored locally; {idx.name} send failed ({e}), `nimblemind flush` retries it"
 
 
 def _unsynced_file(cfg, namespace: str) -> Path:
@@ -195,7 +195,7 @@ def write(cfg, path: str, kind: str, content: str, *, source_id: str = "",
         })
         _anchor(cfg, entry_id, namespace, rec.digest)
         _log(cfg, f"pending {path} {namespace} {source_id} -> pending/{entry_id}")
-        return WriteResult(PENDING, source_id, "awaiting `memila-brain pending approve`", entry_id)
+        return WriteResult(PENDING, source_id, "awaiting `nimblemind pending approve`", entry_id)
 
     if approved_by:
         by = approved_by

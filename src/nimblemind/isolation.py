@@ -68,7 +68,7 @@ def _command(content: str, iso: dict) -> Verdict:
     argv = iso.get("command") or []
     if not argv:
         return Verdict(UNAVAILABLE, "isolation.checks names `command` but isolation.command is empty")
-    fd, path = tempfile.mkstemp(prefix="memila-brain-scan-", suffix=".md")
+    fd, path = tempfile.mkstemp(prefix="nimblemind-scan-", suffix=".md")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(content)

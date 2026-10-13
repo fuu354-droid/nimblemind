@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 
-from memila_brain.harness import condense
+from nimblemind.harness import condense
 
 
 class Generic:

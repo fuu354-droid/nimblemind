@@ -13,8 +13,8 @@ import getpass
 import json
 from pathlib import Path
 
-from memila_brain.fsutil import append_line, read_text
-from memila_brain.records import now_iso
+from nimblemind.fsutil import append_line, read_text
+from nimblemind.records import now_iso
 
 
 def level(cfg, path: str) -> str:

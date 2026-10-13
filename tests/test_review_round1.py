@@ -9,11 +9,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from memila_brain import config as config_mod
-from memila_brain import migrate, paths, recall, writes
-from memila_brain.backends import BackendError
-from memila_brain.backends.memila import MemilaBackend, is_forbidden
-from memila_brain.records import Record
+from nimblemind import config as config_mod
+from nimblemind import migrate, paths, recall, writes
+from nimblemind.backends import BackendError
+from nimblemind.backends.memila import MemilaBackend, is_forbidden
+from nimblemind.records import Record
 
 
 def test_f1_forged_entry_with_its_own_hash_and_namespace_is_refused(cfg):
@@ -95,7 +95,7 @@ def test_f4_redirect_to_a_forbidden_host_is_not_followed():
 
 
 def test_f5_environment_cannot_grant_approval(cfg, monkeypatch):
-    monkeypatch.setenv("MEMILA_BRAIN_APPROVAL_CLI", "allow")
+    monkeypatch.setenv("NIMBLEMIND_APPROVAL_CLI", "allow")
     c = cfg()
     assert c["approval"]["cli"] == "ask"
     assert writes.write(c, "cli", "note", "x").state == writes.PENDING
@@ -105,7 +105,7 @@ def test_f6_allow_is_attributed_to_the_grants_file(cfg, tmp_path):
     config_mod.set_grant("cli", True)
     proj = tmp_path / "proj"
     proj.mkdir()
-    (proj / ".memila-brain.toml").write_text("[journal]\nmax_words = 100\n", encoding="utf-8")
+    (proj / ".nimblemind.toml").write_text("[journal]\nmax_words = 100\n", encoding="utf-8")
     c = config_mod.load(proj)
     writes.write(c, "cli", "note", "x")
     line = json.loads(c.layout().approvals.read_text(encoding="utf-8").splitlines()[-1])
@@ -113,7 +113,7 @@ def test_f6_allow_is_attributed_to_the_grants_file(cfg, tmp_path):
 
 
 def test_f7_trust_refuses_a_file_swapped_after_it_was_shown(tmp_path):
-    f = tmp_path / ".memila-brain.toml"
+    f = tmp_path / ".nimblemind.toml"
     f.write_text('namespace = "a"\n', encoding="utf-8")
     shown = f.read_bytes()
     f.write_text('namespace = "swapped"\n', encoding="utf-8")
@@ -123,15 +123,15 @@ def test_f7_trust_refuses_a_file_swapped_after_it_was_shown(tmp_path):
 
 
 def test_f8_environment_overrides_a_trusted_project(tmp_path, monkeypatch):
-    f = tmp_path / ".memila-brain.toml"
+    f = tmp_path / ".nimblemind.toml"
     f.write_text('namespace = "projns"\n', encoding="utf-8")
     config_mod.trust(f)
-    monkeypatch.setenv("MEMILA_BRAIN_NAMESPACE", "envns")
+    monkeypatch.setenv("NIMBLEMIND_NAMESPACE", "envns")
     assert config_mod.load(tmp_path).namespace == "envns"
 
 
 def test_f9_project_lowering_total_alone_clamps_the_parts(tmp_path):
-    (tmp_path / ".memila-brain.toml").write_text("[budget]\ntotal_chars = 1000\n", encoding="utf-8")
+    (tmp_path / ".nimblemind.toml").write_text("[budget]\ntotal_chars = 1000\n", encoding="utf-8")
     b = config_mod.load(tmp_path)["budget"]
     assert b["total_chars"] == 1000
     assert max(b["core_chars"], b["recall_chars"], b["prompt_chars"]) <= 1000
@@ -144,7 +144,7 @@ def test_f10_hook_output_is_utf8_under_a_legacy_code_page(cfg, tmp_path):
     proj = tmp_path / "projé"
     proj.mkdir()
     env = dict(__import__("os").environ, PYTHONIOENCODING="cp1252")
-    r = subprocess.run([sys.executable, "-m", "memila_brain", "hook", "session-start"],
+    r = subprocess.run([sys.executable, "-m", "nimblemind", "hook", "session-start"],
                        input=json.dumps({"cwd": str(proj)}).encode("utf-8"),
                        capture_output=True, env=env, timeout=60)
     assert r.returncode == 0

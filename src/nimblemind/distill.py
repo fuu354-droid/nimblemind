@@ -14,10 +14,10 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from memila_brain import harness as harness_mod
-from memila_brain import journal, model, writes
-from memila_brain.fsutil import append_line
-from memila_brain.records import now_iso
+from nimblemind import harness as harness_mod
+from nimblemind import journal, model, writes
+from nimblemind.fsutil import append_line
+from nimblemind.records import now_iso
 
 MAX_TRANSCRIPT_CHARS = 60000
 MAX_ATTEMPTS = 2
@@ -29,7 +29,7 @@ def _log(cfg, msg: str) -> None:
 
 def spawn(transcript_path: str, session_id: str, cwd: str) -> None:
     """Start the distill child, detached from the hook's process group."""
-    argv = [sys.executable, "-m", "memila_brain", "distill",
+    argv = [sys.executable, "-m", "nimblemind", "distill",
             "--transcript", transcript_path, "--session-id", session_id, "--cwd", cwd]
     kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
                     "stderr": subprocess.DEVNULL, "close_fds": True}

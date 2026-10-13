@@ -5,10 +5,10 @@ import socket
 
 import pytest
 
-from memila_brain import config as config_mod
-from memila_brain import recall, writes
-from memila_brain.backends.local import LocalBackend
-from memila_brain.records import Record
+from nimblemind import config as config_mod
+from nimblemind import recall, writes
+from nimblemind.backends.local import LocalBackend
+from nimblemind.records import Record
 
 
 @pytest.fixture
@@ -100,12 +100,12 @@ def test_4_injection_never_exceeds_total_budget(cfg, user_config):
             writes.write(c, "cli", "journal", body, source_id=f"session:{total}-{i}")
         out = recall.assemble(c)
         assert 0 < len(out) <= total, (total, len(out))
-        assert out.startswith("[memila-brain default]")
-        assert "[memila-brain:" in out  # every cut is named
+        assert out.startswith("[nimblemind default]")
+        assert "[nimblemind:" in out  # every cut is named
 
 
 def test_5_nothing_written_under_dot_claude(cfg, fake_model, tmp_path, user_config):
-    from memila_brain import distill
+    from nimblemind import distill
     from conftest import toml_list
 
     home = tmp_path / "home"

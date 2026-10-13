@@ -1,14 +1,14 @@
 import pytest
 
-from memila_brain import config as config_mod
-from memila_brain import paths
+from nimblemind import config as config_mod
+from nimblemind import paths
 from conftest import toml_list
 
 
 def project(tmp_path, text):
     root = tmp_path / "repo"
     (root / "sub" / "deep").mkdir(parents=True, exist_ok=True)
-    f = root / ".memila-brain.toml"
+    f = root / ".nimblemind.toml"
     f.write_text(text, encoding="utf-8")
     return root, f
 
@@ -92,8 +92,8 @@ def test_trusted_isolation_command_applies(tmp_path):
 
 def test_env_overrides_user_config(tmp_path, user_config, monkeypatch):
     user_config('namespace = "file"\n[budget]\ntotal_chars = 5000\n')
-    monkeypatch.setenv("MEMILA_BRAIN_NAMESPACE", "env")
-    monkeypatch.setenv("MEMILA_BRAIN_BUDGET_TOTAL_CHARS", "4500")
+    monkeypatch.setenv("NIMBLEMIND_NAMESPACE", "env")
+    monkeypatch.setenv("NIMBLEMIND_BUDGET_TOTAL_CHARS", "4500")
     c = config_mod.load(tmp_path)
     assert c.namespace == "env" and c["budget"]["total_chars"] == 4500
 

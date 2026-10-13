@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from memila_brain.harness import condense
+from nimblemind.harness import condense
 
 
 def _text_blocks(content) -> str:

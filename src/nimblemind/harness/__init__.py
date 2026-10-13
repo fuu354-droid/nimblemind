@@ -28,11 +28,11 @@ class Harness(Protocol):
 
 def load(name: str) -> Harness:
     if name == "claude-code":
-        from memila_brain.harness.claude_code import ClaudeCode
+        from nimblemind.harness.claude_code import ClaudeCode
 
         return ClaudeCode()
     if name == "generic":
-        from memila_brain.harness.generic import Generic
+        from nimblemind.harness.generic import Generic
 
         return Generic()
     raise ValueError(f"unknown harness {name!r}; expected claude-code or generic")
