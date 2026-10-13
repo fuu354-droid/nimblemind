@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+
+from nimblemind.fsutil import which
 
 CHILD_ENV = "NIMBLEMIND_CHILD"
 
@@ -45,7 +46,7 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
     if command == "none":
         raise ModelError("model command is `none`")
     if command == "claude-cli":
-        exe = shutil.which("claude")
+        exe = which("claude")
         if not exe:
             raise ModelError("the `claude` CLI is not on PATH; install it or set command = \"argv\"")
         argv = [exe, "-p", "--model", spec.get("model") or "haiku",
@@ -57,7 +58,7 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
         argv = [a.replace("{model}", spec.get("model", "")) for a in spec.get("argv") or []]
         if not argv:
             raise ModelError('command = "argv" needs a non-empty argv list')
-        resolved = shutil.which(argv[0])
+        resolved = which(argv[0])
         if resolved:
             argv[0] = resolved
         stdin = system + "\n\n" + user

@@ -113,7 +113,7 @@ def _load_toml(path: Path) -> dict:
             return tomllib.load(f)
     except FileNotFoundError:
         return {}
-    except (tomllib.TOMLDecodeError, OSError) as e:
+    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError) as e:
         raise ConfigError(f"{path}: {e}") from None
 
 
@@ -339,6 +339,9 @@ def load(cwd: Path | str | None = None) -> Config:
         raise ConfigError(f"cwd must be an absolute path, got {str(cwd)!r}")
     notes: list[str] = []
     user = _load_toml(paths.user_config())
+    scalars = [k for k, v in user.items() if isinstance(DEFAULTS.get(k), dict) and not isinstance(v, dict)]
+    if scalars:
+        raise ConfigError(f"{paths.user_config()}: {', '.join(scalars)} must be a table")
     user_approval = user.pop("approval", None) or {}
     data = _merge(DEFAULTS, user)
     # The user config can tighten approval (ask, deny) but not grant it.

@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
+from nimblemind.fsutil import neutral_dir, which
+
 PASS, REFUSED, UNAVAILABLE = "pass", "refused", "unavailable"
 
 # Credential shapes common enough to be worth refusing everywhere. Each is
@@ -74,9 +76,13 @@ def _command(content: str, iso: dict, argv: list) -> Verdict:
         cmd = [a.replace("{file}", path) for a in argv]
         if not any("{file}" in a for a in argv):
             cmd.append(path)
+        resolved = which(cmd[0])
+        if resolved:
+            cmd[0] = resolved
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=float(iso.get("timeout", 60)))
+                               errors="replace", timeout=float(iso.get("timeout", 60)),
+                               cwd=neutral_dir())
         except (OSError, subprocess.SubprocessError, ValueError) as e:
             return Verdict(UNAVAILABLE, f"{type(e).__name__}: {e}")
         if r.returncode == 0:

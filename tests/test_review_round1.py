@@ -169,7 +169,7 @@ def test_audit_sees_a_record_the_index_lost(cfg):
     del idx["records"]["note:2"]
     index_file.write_text(json.dumps(idx), encoding="utf-8")
     assert [r.source_id for r in writes.canonical(c).list("default")] == ["note:1"]
-    assert writes.audit(c) == ["note:2: stored with no approval entry"]
+    assert writes.audit(c, "default") == ["note:2: stored with no approval entry"]
 
 
 def test_bracketed_ipv6_forbidden_entry_matches():

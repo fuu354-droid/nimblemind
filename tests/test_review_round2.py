@@ -58,7 +58,7 @@ def test_f2_2_audit_catches_a_kind_change_after_storing(cfg):
     d = json.loads(f.read_text(encoding="utf-8"))
     d["kind"] = "journal"
     f.write_text(json.dumps(d), encoding="utf-8")
-    assert writes.audit(c) == ["note:1: content differs from what was approved"]
+    assert writes.audit(c, "default") == ["note:1: content differs from what was approved"]
 
 
 def test_f2_3_trust_is_checked_on_the_bytes_that_are_parsed(tmp_path, monkeypatch):

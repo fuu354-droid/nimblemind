@@ -375,15 +375,21 @@ def flush(cfg, namespace: str = "") -> tuple[int, int]:
     return sent, len(left)
 
 
-def audit(cfg, namespace: str = "") -> list[str]:
-    """Problems with stored records against the approval log; empty is clean."""
-    namespace = namespace or cfg.namespace
+def audit(cfg, namespace: str | None = None) -> list[str]:
+    """Problems with stored records against the approval log; empty is
+    clean. Every namespace on disk unless one is named (DESIGN.md section 7:
+    every record file)."""
     log = approval.latest(cfg.layout().approvals)
-    recs, problems = canonical(cfg).scan(namespace)
+    local = canonical(cfg)
+    if namespace:
+        recs, problems = local.scan(namespace)
+    else:
+        recs, problems = local.scan_all()
     for rec in recs:
-        entry = log.get((namespace, rec.source_id))
+        entry = log.get((rec.namespace, rec.source_id))
+        where = "" if namespace else f"{rec.namespace}/"
         if entry is None:
-            problems.append(f"{rec.source_id}: stored with no approval entry")
+            problems.append(f"{where}{rec.source_id}: stored with no approval entry")
         elif entry.get("sha256") != rec.digest:
-            problems.append(f"{rec.source_id}: content differs from what was approved")
+            problems.append(f"{where}{rec.source_id}: content differs from what was approved")
     return problems

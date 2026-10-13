@@ -42,8 +42,13 @@ Non-goals, ruled in the origin task:
   version never matters: the console script's own launcher points at that
   environment, and the hooks call nothing else.
 - One package, `nimblemind`, one console script, `nimblemind`, and
-  `python -m nimblemind` as the equivalent for hosts where the scripts
-  directory is not on `PATH`.
+  `python -P -m nimblemind` as the equivalent for hosts where the scripts
+  directory is not on `PATH` (`-P` keeps the session's directory, which is
+  the project, off `sys.path`).
+- Child processes (the distill child, model commands, isolation commands)
+  run in the system temp directory, never in the session's project, and
+  executables are looked up without the current directory, so nothing a
+  repository contains is run by a relative lookup.
 - No shell wrapper. Every hook command is the console script itself, so the
   same command line works under bash, zsh, PowerShell and cmd.
 - File locking uses `fcntl` on POSIX and `msvcrt` on Windows behind one helper.

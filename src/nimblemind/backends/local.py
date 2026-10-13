@@ -194,6 +194,31 @@ class LocalBackend:
                     recs.append(rec)
         return recs, bad
 
+    def scan_all(self) -> tuple[list[Record], list[str]]:
+        """`scan` over every namespace directory on disk. A record must sit
+        in the directory and under the file name its own namespace and
+        source id map to; anything else is reported."""
+        root = self.home / "namespaces"
+        recs, bad = [], []
+        if not root.is_dir():
+            return recs, bad
+        for ns_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            d = ns_dir / "records"
+            if not d.is_dir():
+                continue
+            for f in sorted(d.glob("*.json")):
+                if f.name == "index.json":
+                    continue
+                rec = self._read_record(f)
+                if rec is None:
+                    bad.append(f"{ns_dir.name}/{f.name}: not a readable record")
+                elif self._file(rec.namespace, rec.source_id) != f:
+                    bad.append(f"{ns_dir.name}/{f.name}: holds {rec.namespace}/{rec.source_id}, "
+                               "which does not belong under this name")
+                else:
+                    recs.append(rec)
+        return recs, bad
+
     def list(self, namespace: str) -> list[Record]:
         index = self._read_index(namespace)["records"]
         recs = [r for sid in index if (r := self.get(sid, namespace)) is not None]

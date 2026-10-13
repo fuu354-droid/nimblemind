@@ -91,3 +91,22 @@ def append_line(path: Path, line: str, lock: Path | None = None) -> None:
     with ctx:
         with open(path, "a", encoding="utf-8", newline="\n") as f:
             f.write(line.rstrip("\n") + "\n")
+
+
+def which(name: str) -> str | None:
+    """`shutil.which` without the current directory. On Windows the default
+    search tries the current directory first, which is the session's
+    project when a hook runs, so a `claude.cmd` planted in a repository
+    would win; `NoDefaultCurrentDirectoryInExePath` turns that off, for this
+    lookup and for every process started afterwards."""
+    import shutil
+
+    if sys.platform == "win32":
+        os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
+    return shutil.which(name)
+
+
+def neutral_dir() -> str:
+    """Where child processes run: never the session's project, so nothing in
+    a repository is found by a relative lookup."""
+    return tempfile.gettempdir()

@@ -42,7 +42,7 @@ def _configured_home() -> Path | None:
     try:
         with open(user_config(), "rb") as f:
             raw = tomllib.load(f).get("home")
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
         return None
     return Path(raw).expanduser() if isinstance(raw, str) and raw.strip() else None
 

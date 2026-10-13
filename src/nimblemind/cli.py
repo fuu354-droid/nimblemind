@@ -152,8 +152,11 @@ def cmd_store(args) -> int:
     # isolation check passes: never asked about content the check refuses.
     ask = (lambda: confirm(f"Store this {args.kind} in namespace {cfg.namespace!r}?")) \
         if args.approve else None
-    r = writes.write(cfg, "cli", args.kind, content, source_id=args.source_id or "",
-                     metadata={}, confirm=ask)
+    try:
+        r = writes.write(cfg, "cli", args.kind, content, source_id=args.source_id or "",
+                         metadata={}, confirm=ask)
+    except ValueError as e:
+        raise SystemExit(f"store: {e}") from None
     _out(args, r.__dict__, f"{r.state} {r.source_id}" + (f": {r.detail}" if r.detail else ""))
     return 0 if r.state in ("stored", "pending") else 1
 
@@ -304,7 +307,7 @@ def cmd_audit(args) -> int:
     from nimblemind import writes
 
     cfg = _cfg(args)
-    problems = writes.audit(cfg)
+    problems = writes.audit(cfg, args.namespace or None)
     print("\n".join(problems) if problems else "audit clean")
     return 1 if problems else 0
 
@@ -321,9 +324,13 @@ def cmd_flush(args) -> int:
 # ---- config --------------------------------------------------------------
 
 def cmd_trust(args) -> int:
-    path = Path(args.path).resolve() if args.path else None
-    if path and path.is_dir():
-        path = path / ".nimblemind.toml"
+    # Resolve the directory only: resolving the file would follow a symlinked
+    # .nimblemind.toml to another project's file and trust that instead.
+    path = None
+    if args.path:
+        given = Path(args.path)
+        path = given.resolve() / ".nimblemind.toml" if given.is_dir() \
+            else given.parent.resolve() / given.name
     if path is None:
         from nimblemind.paths import find_project_config
 
