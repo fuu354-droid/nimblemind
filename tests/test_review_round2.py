@@ -103,9 +103,11 @@ def test_approved_entry_cannot_be_replayed(cfg):
         writes.approve(c, r.entry_id, by="t")
 
 
-def test_negative_project_budget_is_ignored(tmp_path):
+def test_negative_project_budget_is_a_config_error(tmp_path):
+    # Round 14: a wrongly written tightening is an error, not silently dropped.
     (tmp_path / ".nimblemind.toml").write_text("[budget]\ntotal_chars = -5\n", encoding="utf-8")
-    assert config_mod.load(tmp_path)["budget"]["total_chars"] == 6000
+    with pytest.raises(config_mod.ConfigError, match="non-negative"):
+        config_mod.load(tmp_path)
 
 
 def test_memila_ignores_proxy_environment(monkeypatch):

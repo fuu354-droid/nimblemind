@@ -27,6 +27,8 @@ class Generic:
             data = {"prompt": raw.strip()}
         if not isinstance(data, dict):
             data = {"prompt": raw.strip()}
+        if "cwd" in data and not isinstance(data["cwd"], str):
+            raise ValueError("hook payload cwd is not a string")
         out = {k: data[k] for k in ("session_id", "cwd", "transcript_path", "prompt")
                if isinstance(data.get(k), str)}
         out.setdefault("cwd", logical_cwd())

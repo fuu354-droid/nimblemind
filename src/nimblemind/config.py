@@ -186,13 +186,24 @@ def _stricter_level(a: str, b: str) -> str:
 def _narrow(user: dict, project: dict) -> dict:
     """Apply the project's narrowing sections to `user`, stricter wins."""
     out = copy.deepcopy(user)
+    # A tightening the project meant but wrote wrongly is an error, never
+    # silently dropped: a person reading the file would believe it applies.
     for p, level in (project.get("approval") or {}).items():
-        if p in out["approval"] and level in APPROVAL_LEVELS:
-            out["approval"][p] = _stricter_level(out["approval"][p], level)
+        if p not in out["approval"] or level not in APPROVAL_LEVELS:
+            raise ConfigError(f"project approval.{p} = {level!r}: expected a write path "
+                              f"{APPROVAL_PATHS} set to one of {APPROVAL_LEVELS}")
+        out["approval"][p] = _stricter_level(out["approval"][p], level)
     for k, v in (project.get("budget") or {}).items():
-        if k in out["budget"] and isinstance(v, int) and not isinstance(v, bool) and v >= 0:
-            out["budget"][k] = min(out["budget"][k], v)
+        if k not in out["budget"] or not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            raise ConfigError(f"project budget.{k} = {v!r}: expected a known key and a "
+                              "non-negative integer")
+        out["budget"][k] = min(out["budget"][k], v)
     iso = project.get("isolation") or {}
+    for key in ("checks", "deny"):
+        if key in iso and not (isinstance(iso[key], list) and all(isinstance(x, str) for x in iso[key])):
+            raise ConfigError(f"project isolation.{key} must be a list of strings")
+    if "identity" in iso and not isinstance(iso["identity"], dict):
+        raise ConfigError("project isolation.identity must be a table")
     checks = iso.get("checks")
     if isinstance(checks, list):
         out["isolation"]["checks"] = list(dict.fromkeys([*out["isolation"]["checks"], *checks]))

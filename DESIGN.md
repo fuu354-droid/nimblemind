@@ -53,7 +53,8 @@ Non-goals, ruled in the origin task:
   path, looked up without the current directory. Prompt text never goes on
   a command line (on Windows an npm-installed `claude` is a `.cmd` shim run
   through `cmd.exe`); it goes on stdin, and the model name must be a plain
-  token. "The current directory" is the logical one (`$PWD` when it names
+  token (letters, digits, `.`, `_`, `:`, `-`, not starting with `-`),
+  whether it goes to `claude` or into an `argv` command's `{model}`. "The current directory" is the logical one (`$PWD` when it names
   the same directory), so a symlinked directory stays unresolved.
 - No shell wrapper. Every hook command is the console script itself, so the
   same command line works under bash, zsh, PowerShell and cmd.
@@ -118,7 +119,8 @@ not trusted the way the user's own file is:
 
 - In the narrowing sections (`approval`, `budget`, and the pattern parts of
   `isolation`) it can only narrow what the user config allows, never widen
-  it: the stricter value wins, so a repository cannot grant itself write
+  it, and a value there of the wrong type or an unknown key is a config
+  error rather than silently ignored: the stricter value wins, so a repository cannot grant itself write
   access or a bigger injection. This holds even for a trusted project.
 - Every key that runs a command, loads code, chooses where data is sent or
   which memory pool a session reads (`namespace`, `harness`, `backend`, the
@@ -269,11 +271,13 @@ Nothing else in the package calls `Backend.store`.
   driving a shell has no terminal, so it can queue writes but cannot approve
   its own.
 - `pending approve` shows each entry (path, kind, source id, hash, content)
-  before asking, and stores exactly what was shown. Every text the CLI
-  prints shows control characters, DEL, C1 controls and Unicode
-  bidirectional overrides as visible `\uXXXX` escapes, so content cannot
-  rewrite the terminal to hide part of itself; `--json` output carries the
-  exact text. It refuses an entry that
+  before asking, and stores exactly what was shown; `store --approve`
+  shows the record the same way before it asks. Every text the CLI prints
+  shows each non-printable character (controls, format characters such as
+  zero-width spaces and Unicode tag characters, bidirectional overrides,
+  line separators; newline and tab excepted) as a visible `\uXXXX` escape,
+  so content cannot hide part of itself; `--json` output carries the exact
+  text. It refuses an entry that
   does not match its anchor in `pending.jsonl` (namespace and hash, written
   when it was queued, outside the entry file), one whose hash differs from
   the one shown, one whose path is now `deny`, and one that no longer passes

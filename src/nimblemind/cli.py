@@ -53,17 +53,16 @@ def _cfg(args) -> config_mod.Config:
     return cfg
 
 
-# Characters that change what a terminal shows rather than showing
-# themselves: C0 controls (except newline and tab), DEL, C1 controls, and the
-# Unicode bidirectional overrides and isolates. A person approving a write
-# must see exactly what will be stored, so none of these reach the terminal
-# raw: `\r\x1b[2K` would otherwise erase the line before it.
-_HIDING = {c for c in range(0x20) if c not in (0x0A, 0x09)} | {0x7F} | set(range(0x80, 0xA0)) \
-    | set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A)) | {0x200E, 0x200F, 0x061C}
-
-
+# What a terminal would not show as itself: anything Python calls
+# non-printable (C0 and C1 controls, DEL, format characters such as
+# zero-width spaces, word joiners, byte order marks, soft hyphens, Unicode tag
+# characters and bidirectional overrides, line and paragraph separators),
+# except newline and tab. A person approving a write must see exactly what
+# will be stored; `\r\x1b[2K` or a run of tag characters would otherwise
+# hide part of it.
 def visible(text: str) -> str:
-    return "".join(f"\\u{ord(ch):04x}" if ord(ch) in _HIDING else ch for ch in str(text))
+    return "".join(ch if ch in "\n\t" or ch.isprintable() else f"\\u{ord(ch):04x}"
+                   for ch in str(text))
 
 
 def say(*parts, file=None) -> None:
@@ -184,8 +183,13 @@ def cmd_store(args) -> int:
         raise SystemExit("nothing to store")
     # With --approve the prompt runs inside the write path, after its one
     # isolation check passes: never asked about content the check refuses.
-    ask = (lambda: confirm(f"Store this {args.kind} in namespace {cfg.namespace!r}?")) \
-        if args.approve else None
+    def ask(rec):
+        # Shown exactly as `pending approve` shows an entry: what is
+        # approved is what was on screen.
+        say(f"== path cli  kind {rec.kind}  {rec.source_id}  sha256 {rec.digest[:12]}\n{rec.content}")
+        return confirm(f"Store this {rec.kind} in namespace {rec.namespace!r}?")
+
+    ask = ask if args.approve else None
     try:
         r = writes.write(cfg, "cli", args.kind, content, source_id=args.source_id or "",
                          metadata={}, confirm=ask)
@@ -381,7 +385,7 @@ def cmd_trust(args) -> int:
     try:
         digest = config_mod.trust(path, expect=shown)
     except ValueError as e:
-        raise SystemExit(str(e)) from None
+        raise SystemExit(visible(str(e))) from None
     say(f"trusted {path} (sha256 {digest[:12]})")
     return 0
 

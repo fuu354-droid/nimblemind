@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from nimblemind.fsutil import private_dir, which
 
 CHILD_ENV = "NIMBLEMIND_CHILD"
-_SAFE_ARG = re.compile(r"^[A-Za-z0-9._:-]{1,100}$")
+_SAFE_ARG = re.compile(r"^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,99}$")  # no leading "-"
 
 
 class ModelError(RuntimeError):
@@ -63,7 +63,11 @@ def run(spec: dict, system: str, user: str, *, tools: list[str] | None = None) -
             argv += ["--allowedTools", ",".join(tools)]
         stdin = system + "\n\n" + user
     elif command == "argv":
-        argv = [a.replace("{model}", spec.get("model", "")) for a in spec.get("argv") or []]
+        raw_argv = spec.get("argv") or []
+        if any("{model}" in a for a in raw_argv) and not _SAFE_ARG.match(spec.get("model") or ""):
+            raise ModelError(f"model name {spec.get('model')!r} has characters a command line "
+                             "cannot carry safely")
+        argv = [a.replace("{model}", spec.get("model", "")) for a in raw_argv]
         if not argv:
             raise ModelError('command = "argv" needs a non-empty argv list')
         resolved = argv[0] if os.path.isabs(argv[0]) else which(argv[0])

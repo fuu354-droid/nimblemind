@@ -212,7 +212,7 @@ def write(cfg, path: str, kind: str, content: str, *, source_id: str = "",
     if lvl == "ask" and not approved_by and confirm is not None:
         # The one scan above passed; only now is a person asked (section 7:
         # never asked to approve what the check refuses).
-        approved_by = confirm()
+        approved_by = confirm(rec)
     if lvl == "ask" and not approved_by:
         entry_id = _save_entry(layout.pending, {
             "record": rec.to_dict(), "path": path, "sha256": rec.digest,
