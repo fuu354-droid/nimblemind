@@ -36,6 +36,7 @@ from pathlib import Path
 from nimblemind import paths
 from nimblemind.fsutil import atomic_write, read_text
 
+MAX_TIMEOUT = 86400  # one day; past it a timeout is a mistake, and huge values overflow
 APPROVAL_PATHS = ("distill", "research", "gap", "provider", "cli")
 APPROVAL_LEVELS = ("deny", "ask", "allow")  # strictest first
 
@@ -253,8 +254,10 @@ def _validate(data: dict) -> None:
         raise ConfigError("isolation.identity must map each namespace to a list of strings")
     for section in ("isolation", "distiller", "researcher"):
         t = data[section].get("timeout")
-        if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) or t <= 0:
-            raise ConfigError(f"{section}.timeout must be a positive number")
+        if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) \
+                or not 0 < t <= MAX_TIMEOUT:
+            raise ConfigError(f"{section}.timeout must be a positive number of seconds, "
+                              f"at most {MAX_TIMEOUT}")
     known = {"builtin-secrets", "builtin-patterns", "command"}
     for c in data["isolation"]["checks"]:
         if c not in known:
@@ -454,6 +457,11 @@ def load(cwd: Path | str | None = None) -> Config:
         # was kept because the file is trusted.
         data = _merge(data, project)
         before = data["budget"].get("total_chars")
+        # Whether the user layer itself asked for a command check, read
+        # before the project's checks are merged in: a project turning on
+        # its own command check (in `checks`, as documented) must not look
+        # like a user check left without a command.
+        user_wants_command = "command" in data["isolation"]["checks"]
         data = _narrow(data, narrowing)
         project_lowered_total = data["budget"].get("total_chars") != before
         if trusted:
@@ -466,6 +474,7 @@ def load(cwd: Path | str | None = None) -> Config:
                 data["isolation"]["project_command"] = iso["command"]
                 if "command" not in data["isolation"]["checks"]:
                     data["isolation"]["checks"].append("command")
+                if not user_wants_command:
                     # The project, not the user, asked for a command check;
                     # an empty user command is then simply absent.
                     data["isolation"]["project_added_command"] = True
