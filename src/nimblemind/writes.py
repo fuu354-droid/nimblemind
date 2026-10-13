@@ -110,6 +110,16 @@ def _mark_unsynced(cfg, source_id: str, namespace: str) -> None:
         atomic_write(f, json.dumps(ids) + "\n")
 
 
+def _scan(content: str, namespace: str, cfg) -> isolation.Verdict:
+    """The isolation check, with any failure of the check itself turned into
+    an `unavailable` verdict: a check that crashes holds the write, it never
+    loses it or lets it through."""
+    try:
+        return isolation.check(content, namespace, cfg)
+    except Exception as e:
+        return isolation.Verdict(isolation.UNAVAILABLE, f"check failed: {type(e).__name__}: {e}")
+
+
 def _anchor_file(cfg) -> Path:
     return cfg.layout().home / "pending.jsonl"
 
@@ -161,7 +171,7 @@ def _commit(cfg, rec: Record, *, path: str, by: str, rule: str) -> str:
 def write(cfg, path: str, kind: str, content: str, *, source_id: str = "",
           namespace: str = "", metadata: dict | None = None,
           approved_by: str = "", rule: str = "command",
-          created_at: str = "") -> WriteResult:
+          created_at: str = "", confirm=None) -> WriteResult:
     """Persist `content` through isolation and approval.
 
     `path` names the write path whose approval level applies. `approved_by`
@@ -179,7 +189,7 @@ def write(cfg, path: str, kind: str, content: str, *, source_id: str = "",
         rec.created_at = created_at
     layout = cfg.layout(namespace)
 
-    verdict = isolation.check(content, namespace, cfg)
+    verdict = _scan(content, namespace, cfg)
     if not verdict.ok:
         entry_id = _save_entry(layout.held, {
             "record": rec.to_dict(), "path": path, "sha256": rec.digest,
@@ -193,6 +203,10 @@ def write(cfg, path: str, kind: str, content: str, *, source_id: str = "",
     if lvl == "deny":
         _log(cfg, f"reject {path} {namespace} {source_id}: approval.{path} = deny")
         return WriteResult(REJECTED, source_id, f"approval.{path} is deny")
+    if lvl == "ask" and not approved_by and confirm is not None:
+        # The one scan above passed; only now is a person asked (section 7:
+        # never asked to approve what the check refuses).
+        approved_by = confirm()
     if lvl == "ask" and not approved_by:
         entry_id = _save_entry(layout.pending, {
             "record": rec.to_dict(), "path": path, "sha256": rec.digest,
@@ -256,6 +270,23 @@ def load_pending(cfg, entry_id: str, namespace: str = "") -> dict:
     return entry
 
 
+def preflight(cfg, entry_id: str, namespace: str = "") -> dict:
+    """Everything `approve` will check, run before a person is asked, so a
+    prompt is never shown for an entry that would be refused. `approve`
+    checks again after the prompt, since config can change in between."""
+    entry = load_pending(cfg, entry_id, namespace)
+    rec: Record = entry["_record"]
+    path = entry.get("path")
+    if path not in APPROVAL_PATHS:
+        raise ValueError(f"pending entry {entry_id} names an unknown write path {path!r}")
+    if approval.level(cfg, path) == "deny":
+        raise ValueError(f"approval.{path} is deny; pending entry {entry_id} cannot be stored")
+    verdict = _scan(rec.content, rec.namespace, cfg)
+    if not verdict.ok:
+        raise ValueError(f"pending entry {entry_id} no longer passes isolation: {verdict.report}")
+    return entry
+
+
 def approve(cfg, entry_id: str, *, namespace: str = "", by: str = "",
             expect_sha256: str = "") -> WriteResult:
     """Store one pending entry. Re-checks everything that could have changed
@@ -272,7 +303,7 @@ def approve(cfg, entry_id: str, *, namespace: str = "", by: str = "",
         raise ValueError(f"pending entry {entry_id} names an unknown write path {path!r}")
     if approval.level(cfg, path) == "deny":
         raise ValueError(f"approval.{path} is deny; pending entry {entry_id} cannot be stored")
-    verdict = isolation.check(rec.content, rec.namespace, cfg)
+    verdict = _scan(rec.content, rec.namespace, cfg)
     if not verdict.ok:
         raise ValueError(f"pending entry {entry_id} no longer passes isolation: {verdict.report}")
     f = _entry_file(cfg.layout(namespace).pending, entry_id)

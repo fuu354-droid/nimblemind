@@ -76,9 +76,9 @@ def _command(content: str, iso: dict) -> Verdict:
         if not any("{file}" in a for a in argv):
             cmd.append(path)
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True,
-                               timeout=float(iso.get("timeout", 60)))
-        except (OSError, subprocess.SubprocessError) as e:
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=float(iso.get("timeout", 60)))
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
             return Verdict(UNAVAILABLE, f"{type(e).__name__}: {e}")
         if r.returncode == 0:
             return Verdict(PASS)

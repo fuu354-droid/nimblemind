@@ -43,7 +43,7 @@ def test_distill_queues_a_valid_journal(tmp_path, user_config, fake_model, cfg):
     c = cfg()
     assert distill.distill(c, str(transcript(tmp_path)), "deadbeef-1234") == "pending"
     [entry] = writes.pending(c)
-    assert entry["path"] == "distill" and entry["record"]["source_id"].endswith("-deadbeef")
+    assert entry["path"] == "distill" and "-deadbeef-" in entry["record"]["source_id"]
 
 
 def test_distill_allow_rule_stores_and_recall_shows_it(tmp_path, user_config, fake_model, cfg):

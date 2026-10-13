@@ -9,7 +9,9 @@ and approval decide whether it is stored, queued or held.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import secrets
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -47,9 +49,14 @@ def spawn(transcript_path: str, session_id: str, cwd: str, harness_name: str = "
 
 
 def source_id_for(session_id: str) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    """A journal's identity: readable stamp and short session id, made
+    unique by microseconds, a hash of the full session id (two ids sharing
+    their first eight characters stay apart) and a random suffix."""
+    now = datetime.now(timezone.utc)
+    stamp = now.strftime("%Y%m%dT%H%M%S") + f"{now.microsecond:06d}Z"
     sid = "".join(c for c in session_id if c.isalnum())[:8] or "unknown"
-    return f"session:{stamp}-{sid}"
+    full = hashlib.sha256(session_id.encode("utf-8", "surrogatepass")).hexdigest()[:8]
+    return f"session:{stamp}-{sid}-{full}{secrets.token_hex(2)}"
 
 
 def distill(cfg, transcript_path: str, session_id: str) -> str:

@@ -70,10 +70,15 @@ def cmd_hook(args) -> int:
     try:
         if model.is_child():
             return 0
-        probe = harness.load(args.harness or "claude-code").read_payload(raw)
-        cfg = config_mod.load(probe.get("cwd") or None)
-        h = harness.load(args.harness or cfg["harness"])
+        # The harness decides how the payload is read, so it is resolved
+        # before the payload: from --harness, else from the config that
+        # applies with no project (user config and environment). Then the
+        # project config is loaded from the cwd that harness found.
+        name = args.harness or config_mod.load(None)["harness"]
+        h = harness.load(name)
         payload = h.read_payload(raw)
+        cfg = config_mod.load(payload.get("cwd") or None)
+        cfg.data["harness"] = name
         if args.event == "session-start":
             block = recall.assemble(cfg)
             if block:
@@ -123,17 +128,12 @@ def cmd_store(args) -> int:
     content = args.text if args.text is not None else sys.stdin.read()
     if not content.strip():
         raise SystemExit("nothing to store")
-    by = ""
-    if args.approve:
-        # Isolation first: a person is never asked to approve what the check
-        # would refuse anyway (DESIGN.md section 7). A refused write goes on
-        # to `write`, which holds it.
-        from nimblemind import isolation
-
-        if isolation.check(content, cfg.namespace, cfg).ok:
-            by = confirm(f"Store this {args.kind} in namespace {cfg.namespace!r}?")
+    # With --approve the prompt runs inside the write path, after its one
+    # isolation check passes: never asked about content the check refuses.
+    ask = (lambda: confirm(f"Store this {args.kind} in namespace {cfg.namespace!r}?")) \
+        if args.approve else None
     r = writes.write(cfg, "cli", args.kind, content, source_id=args.source_id or "",
-                     metadata={}, approved_by=by)
+                     metadata={}, confirm=ask)
     _out(args, r.__dict__, f"{r.state} {r.source_id}" + (f": {r.detail}" if r.detail else ""))
     return 0 if r.state in ("stored", "pending") else 1
 
@@ -205,7 +205,7 @@ def cmd_pending(args) -> int:
     shown, failed = {}, 0
     for i in args.ids:
         try:
-            e = writes.load_pending(cfg, i)
+            e = writes.preflight(cfg, i)
         except ValueError as err:
             failed += 1
             print(f"FAIL {i}: {err}")
