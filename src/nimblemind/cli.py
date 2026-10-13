@@ -92,7 +92,7 @@ def say(*parts, file=None) -> None:
 def _out(args, obj, text: str) -> None:
     if getattr(args, "json", False):
         print(json.dumps(obj, ensure_ascii=False, indent=2))
-    else:
+    elif text:
         say(text)
 
 
@@ -276,7 +276,7 @@ def cmd_pending(args) -> int:
     if args.action == "show":
         items = [e for e in writes.pending(cfg) if e["id"] in args.ids]
         for i in sorted(set(args.ids) - {e["id"] for e in items}):
-            say(f"FAIL {i}: no pending entry")
+            say(f"FAIL {i}: no pending entry", file=sys.stderr)
         _out(args, items, "\n".join(
             f"== {e['id']} ({e['path']}, {e['record']['source_id']})\n{e['record']['content']}"
             for e in items))
@@ -331,7 +331,7 @@ def cmd_held(args) -> int:
         raise SystemExit(f"held {args.action} needs at least one id")
     unknown = [i for i in args.ids if i not in {e["id"] for e in items}]
     for i in unknown:
-        say(f"FAIL {i}: no held entry")
+        say(f"FAIL {i}: no held entry", file=sys.stderr)
     if args.action == "show":
         shown = [e for e in items if e["id"] in args.ids]
         _out(args, shown, "\n".join(
@@ -447,6 +447,14 @@ def cmd_migrate(args) -> int:
     source = args.from_dir or args.source
     if not source:
         raise SystemExit("migrate needs a source directory (positional, or --from)")
+    from nimblemind.fsutil import path_kind
+
+    try:
+        kind = path_kind(Path(source).expanduser())
+    except OSError:
+        kind = "dir"  # let migrate.run report exactly why it cannot be listed
+    if kind != "dir":
+        raise SystemExit(visible(f"FAIL {source}: not a directory"))
     if not args.dry_run:
         confirm(f"Import every passing file in {source} into namespace {cfg.namespace!r}?")
     lines = migrate.run(cfg, Path(source).expanduser(), args.kind, dry_run=args.dry_run)

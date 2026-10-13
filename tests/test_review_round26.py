@@ -21,7 +21,7 @@ def test_f26_1_the_repair_message_names_the_record_and_following_it_resends(cfg,
 
 def test_held_discard_unknown_id_fails(cfg, capsys):
     assert cli.main(["held", "discard", "nope"]) == 1
-    assert "FAIL nope" in capsys.readouterr().out
+    assert "FAIL nope" in capsys.readouterr().err
 
 
 def test_recall_with_a_raising_plugin_is_unavailable(cfg, user_config, tmp_path, monkeypatch, capsys):

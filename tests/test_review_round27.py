@@ -30,7 +30,8 @@ def test_held_discard_without_ids_is_an_error(cfg):
 @pytest.mark.parametrize("cmd", ["pending", "held"])
 def test_show_of_an_unknown_id_names_it(cfg, capsys, cmd):
     assert cli.main([cmd, "show", "nosuch"]) == 1
-    assert "FAIL nosuch" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "FAIL nosuch" in captured.err and captured.out == ""
 
 
 def test_migrate_without_a_source_does_not_ask_first(cfg, monkeypatch):
