@@ -17,14 +17,19 @@ class Generic:
     name = "generic"
 
     def read_payload(self, raw: str) -> dict:
+        """The payload, with the process's own directory as `cwd` whenever the
+        payload names none: a hook runs in the session's directory, and a
+        missing cwd must not mean "no project config"."""
         try:
             data = json.loads(raw) if raw.strip() else {}
         except ValueError:
-            return {"prompt": raw.strip(), "cwd": os.getcwd()}
+            data = {"prompt": raw.strip()}
         if not isinstance(data, dict):
-            return {}
-        return {k: data[k] for k in ("session_id", "cwd", "transcript_path", "prompt")
-                if isinstance(data.get(k), str)}
+            data = {"prompt": raw.strip()}
+        out = {k: data[k] for k in ("session_id", "cwd", "transcript_path", "prompt")
+               if isinstance(data.get(k), str)}
+        out.setdefault("cwd", os.getcwd())
+        return out
 
     def conversation(self, transcript_path: str, max_chars: int) -> tuple[str, int]:
         parts, human = [], 0

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from nimblemind.harness import condense
 
@@ -21,14 +22,18 @@ class ClaudeCode:
     name = "claude-code"
 
     def read_payload(self, raw: str) -> dict:
-        try:
-            data = json.loads(raw) if raw.strip() else {}
-        except ValueError:
-            return {}
+        """Claude Code always sends a JSON object. Anything else is a failed
+        hook call, raised so the hook stays silent rather than injecting
+        memory under a config that never saw the session's project. A
+        payload without `cwd` uses the process's directory, which Claude
+        Code sets to the project."""
+        data = json.loads(raw) if raw.strip() else {}
         if not isinstance(data, dict):
-            return {}
-        return {k: data[k] for k in ("session_id", "cwd", "transcript_path", "prompt")
-                if isinstance(data.get(k), str)}
+            raise ValueError("hook payload is not a JSON object")
+        out = {k: data[k] for k in ("session_id", "cwd", "transcript_path", "prompt")
+               if isinstance(data.get(k), str)}
+        out.setdefault("cwd", os.getcwd())
+        return out
 
     def conversation(self, transcript_path: str, max_chars: int) -> tuple[str, int]:
         parts: list[str] = []

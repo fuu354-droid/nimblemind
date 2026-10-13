@@ -65,8 +65,8 @@ def cmd_hook(args) -> int:
 
     try:
         raw = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
-    except Exception:  # closed, binary or broken stdin: no payload, still exit 0
-        raw = ""
+    except Exception:  # closed, binary or broken stdin: a failed call, so silent
+        return 0
     try:
         if model.is_child():
             return 0
@@ -193,10 +193,11 @@ def cmd_pending(args) -> int:
     if not args.ids:
         raise SystemExit(f"pending {args.action} needs at least one id")
     if args.action == "show":
-        for e in writes.pending(cfg):
-            if e["id"] in args.ids:
-                print(f"== {e['id']} ({e['path']}, {e['record']['source_id']})\n{e['record']['content']}")
-        return 0
+        items = [e for e in writes.pending(cfg) if e["id"] in args.ids]
+        _out(args, items, "\n".join(
+            f"== {e['id']} ({e['path']}, {e['record']['source_id']})\n{e['record']['content']}"
+            for e in items))
+        return 0 if items else 1
     if args.action == "reject":
         for i in args.ids:
             writes.reject(cfg, i)
@@ -237,11 +238,15 @@ def cmd_held(args) -> int:
             f"{e['id']}  {e['verdict']:<11} {e['record']['source_id']}: {e['report'][:80]}"
             for e in items) or "(nothing held)")
         return 0
+    if args.action == "show":
+        shown = [e for e in items if e["id"] in args.ids]
+        _out(args, shown, "\n".join(
+            f"== {e['id']} ({e['verdict']}: {e['report']})\n{e['record']['content']}"
+            for e in shown))
+        return 0 if shown else 1
     for e in items:
         if e["id"] in args.ids:
-            if args.action == "show":
-                print(f"== {e['id']} ({e['verdict']}: {e['report']})\n{e['record']['content']}")
-            elif args.action == "discard":
+            if args.action == "discard":
                 (cfg.layout().held / e["_file"]).unlink(missing_ok=True)
                 print(f"discarded {e['id']}")
     return 0

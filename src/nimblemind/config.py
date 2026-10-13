@@ -321,14 +321,18 @@ def load(cwd: Path | str | None = None) -> Config:
     user_approval = user.pop("approval", None) or {}
     data = _merge(DEFAULTS, user)
     # The user config can tighten approval (ask, deny) but not grant it.
+    explicit: set[str] = set()
     for p, level in (user_approval.items() if isinstance(user_approval, dict) else []):
         if level == "allow":
             notes.append(f"{paths.user_config()}: approval.{p} = \"allow\" ignored; "
                          f"grant it with `nimblemind approval allow {p}`")
             continue
         data["approval"][p] = level
+        explicit.add(p)
+    # A grant lifts only the default `ask`. A path the user config names
+    # explicitly (`ask` or `deny`) is a tightening, and a tightening wins.
     for p in grants():
-        if data["approval"].get(p) == "ask":
+        if p not in explicit and data["approval"].get(p) == "ask":
             data["approval"][p] = "allow"
     # The narrowing sections' environment values act at the user's level, so
     # a project can still only narrow them; every other key's environment
