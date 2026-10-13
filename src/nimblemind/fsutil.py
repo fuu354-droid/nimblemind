@@ -183,3 +183,14 @@ def path_kind(path) -> str | None:
     if stat.S_ISDIR(mode):
         return "dir"
     return "other"
+
+
+def list_json(directory) -> list[Path]:
+    """The `*.json` files directly in `directory`, sorted; [] when the
+    directory does not exist. Listed with `os.scandir`, which raises when a
+    directory exists but cannot be read: `Path.glob` would return nothing
+    there, and an unreadable records directory would read as an empty one."""
+    if path_kind(directory) != "dir":
+        return []
+    with os.scandir(directory) as it:
+        return sorted(Path(e.path) for e in it if e.name.endswith(".json"))

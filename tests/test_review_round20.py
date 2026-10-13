@@ -9,6 +9,10 @@ from nimblemind.backends import BackendError
 from nimblemind.backends.memila import MemilaBackend, _OPENER, is_forbidden
 from conftest import toml_list
 
+# No single quotes: toml_list writes TOML literal strings.
+REFUSE_BADWORD = ('import sys; t = open(sys.argv[1], encoding="utf-8").read(); '
+                  'print("found BADWORD") if "BADWORD" in t else None; sys.exit("BADWORD" in t)')
+
 
 @pytest.mark.parametrize("url", ["ftp://127.0.0.1/", "file:///etc/passwd", "data:,x", "gopher://h/"])
 def test_f20_1_non_http_urls_are_forbidden_and_refused(url):
@@ -52,7 +56,10 @@ def test_project_added_command_alone_still_runs(cfg, tmp_path):
     proj = tmp_path / "proj"
     proj.mkdir()
     f = proj / ".nimblemind.toml"
-    f.write_text(f'[isolation]\ncommand = {toml_list([sys.executable, "-c", "pass", "{file}"])}\n',
+    f.write_text(f'[isolation]\ncommand = {toml_list([sys.executable, "-c", REFUSE_BADWORD, "{file}"])}\n',
                  encoding="utf-8")
     config_mod.trust(f)
-    assert writes.write(config_mod.load(proj), "cli", "note", "x", approved_by="t").state == writes.STORED
+    c = config_mod.load(proj)
+    assert writes.write(c, "cli", "note", "x", approved_by="t").state == writes.STORED
+    r = writes.write(c, "cli", "note", "has BADWORD", approved_by="t")
+    assert r.state == writes.HELD and r.detail == "refused: found BADWORD"

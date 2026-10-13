@@ -36,18 +36,38 @@ def project(tmp_path):
     return proj
 
 
+def named_project(tmp_path):
+    """A trusted project whose namespace shows up in the injected label, so
+    a test sees the project config was loaded (not just that nothing was
+    printed, which a failing hook also gives)."""
+    proj = tmp_path / "named"
+    proj.mkdir()
+    f = proj / ".nimblemind.toml"
+    f.write_text('namespace = "projns"\n', encoding="utf-8")
+    config_mod.trust(f)
+    writes.write(config_mod.load(proj), "cli", "journal", "## Unfinished\n- project core",
+                 source_id="session:p", approved_by="t")
+    return proj
+
+
 def test_f6_2_empty_generic_input_still_loads_the_project(cfg, user_config, tmp_path, monkeypatch):
     user_config('harness = "generic"\n')
     seed(cfg)
-    monkeypatch.chdir(project(tmp_path))
-    assert run_hook(monkeypatch, io.StringIO("")) == ""
-    assert run_hook(monkeypatch, io.StringIO("[1, 2]")) == ""
+    proj = named_project(tmp_path)
+    monkeypatch.chdir(proj)
+    monkeypatch.setenv("PWD", str(proj))
+    for payload in ("", "[1, 2]"):
+        out = run_hook(monkeypatch, io.StringIO(payload))
+        assert "[nimblemind projns]" in out and "project core" in out, payload
 
 
 def test_f6_2_claude_code_payload_without_cwd_uses_the_process_directory(cfg, tmp_path, monkeypatch):
     seed(cfg)
-    monkeypatch.chdir(project(tmp_path))
-    assert run_hook(monkeypatch, io.StringIO("{}")) == ""
+    proj = named_project(tmp_path)
+    monkeypatch.chdir(proj)
+    monkeypatch.setenv("PWD", str(proj))
+    out = run_hook(monkeypatch, io.StringIO("{}"))
+    assert "[nimblemind projns]" in out and "project core" in out
 
 
 def test_f6_3_malformed_payload_injects_nothing(cfg, tmp_path, monkeypatch):

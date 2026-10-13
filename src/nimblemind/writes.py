@@ -24,7 +24,7 @@ from nimblemind import approval, isolation, paths
 from nimblemind import backends as backends_mod
 from nimblemind.backends.local import LocalBackend
 from nimblemind.config import APPROVAL_PATHS
-from nimblemind.fsutil import append_line, atomic_write, file_lock, read_text
+from nimblemind.fsutil import append_line, atomic_write, file_lock, list_json, read_text
 from nimblemind.records import Record, now_iso, sha256
 
 STORED, PENDING, HELD, REJECTED = "stored", "pending", "held", "rejected"
@@ -235,9 +235,7 @@ def write(cfg, path: str, kind: str, content: str, *, source_id: str = "",
 
 def _entries(directory: Path) -> list[dict]:
     out = []
-    if not directory.is_dir():
-        return out
-    for f in sorted(directory.glob("*.json")):
+    for f in list_json(directory):
         try:
             e = json.loads(read_text(f))
         except (OSError, ValueError):

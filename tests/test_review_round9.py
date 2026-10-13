@@ -48,7 +48,7 @@ def test_f9_2_a_symlinked_project_config_borrows_no_trust(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-def test_f9_3_hook_resolves_the_payload_cwd_like_the_cli(cfg, tmp_path, monkeypatch):
+def test_f9_3_hook_and_cli_agree_on_a_symlinked_or_dotdot_cwd(cfg, tmp_path, monkeypatch):
     writes.write(cfg(), "cli", "journal", "## Unfinished\n- core", source_id="session:1",
                  approved_by="t")
     g, f = tmp_path / "G", tmp_path / "F"

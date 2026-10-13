@@ -542,3 +542,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         say(f"config error: {e}", file=sys.stderr)
         return 2
+    except OSError as e:
+        # A data home that cannot be read is reported plainly, not as a
+        # traceback (hooks never get here: cmd_hook catches everything).
+        say(f"error: {e}", file=sys.stderr)
+        return 1

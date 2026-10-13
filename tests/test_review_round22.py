@@ -1,6 +1,7 @@
 """Regression tests for the twenty-second review round (F22-1, F22-2)."""
 
 import os
+import sys
 
 import pytest
 
@@ -47,8 +48,8 @@ def test_f22_1_unreadable_records_directory_is_not_audit_clean(cfg, monkeypatch)
         return real(p, *a, **k)
 
     monkeypatch.setattr(os, "stat", stat)
-    with pytest.raises(PermissionError):
-        writes.audit(c, "default")
+    problems = writes.audit(c, "default")
+    assert len(problems) == 1 and "cannot be listed" in problems[0]
 
 
 def test_path_kind_answers_plainly(tmp_path):
@@ -80,3 +81,35 @@ def test_refusal_report_is_stdout(cfg, user_config, tmp_path):
     user_config(f'[isolation]\nchecks = ["command"]\ncommand = {toml_list([sys.executable, str(script), "{file}"])}\n')
     r = writes.write(cfg(), "cli", "note", "x", approved_by="t")
     assert r.state == writes.HELD and r.detail == "refused: the reason"
+
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX permissions, not root")
+def test_r1_really_unreadable_records_directory_fails_audit(cfg, capsys):
+    from nimblemind import cli
+
+    c = cfg()
+    writes.write(c, "cli", "note", "x", source_id="note:1", approved_by="t")
+    records = c.layout().records
+    records.chmod(0o000)
+    try:
+        assert any("cannot be listed" in p for p in writes.audit(c))
+        assert any("cannot be listed" in p for p in writes.audit(c, "default"))
+        assert cli.main(["audit"]) == 1
+        assert cli.main(["list"]) == 1
+        assert "error:" in capsys.readouterr().err
+    finally:
+        records.chmod(0o700)
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX permissions, not root")
+def test_r1_unreadable_pending_directory_is_an_error_not_empty(cfg):
+    c = cfg()
+    writes.write(c, "cli", "note", "x")
+    pending = c.layout().pending
+    pending.chmod(0o000)
+    try:
+        with pytest.raises(PermissionError):
+            writes.pending(c)
+    finally:
+        pending.chmod(0o700)

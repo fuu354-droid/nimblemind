@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from nimblemind import paths
-from nimblemind.fsutil import atomic_write, file_lock, path_kind, read_text
+from nimblemind.fsutil import atomic_write, file_lock, list_json, path_kind, read_text
 from nimblemind.records import Evidence, Record
 
 _WORD = re.compile(r"\w+", re.UNICODE)
@@ -102,7 +102,7 @@ class LocalBackend:
         index = {"version": 1, "records": {}}
         d = self._dir(namespace)
         if path_kind(d) == "dir":
-            for f in d.glob("*.json"):
+            for f in list_json(d):
                 if f.name == "index.json":
                     continue
                 rec = self._read_record(f)
@@ -180,8 +180,12 @@ class LocalBackend:
         What `audit` reads, so a record the index lost is still checked."""
         d = self._dir(namespace)
         recs, bad = [], []
-        if path_kind(d) == "dir":
-            for f in sorted(d.glob("*.json")):
+        try:
+            files = list_json(d)
+        except OSError as e:
+            return [], [f"{d}: cannot be listed: {e.strerror or e}"]
+        if files:
+            for f in files:
                 if f.name == "index.json":
                     continue
                 rec = self._read_record(f)
@@ -202,11 +206,18 @@ class LocalBackend:
         recs, bad = [], []
         if path_kind(root) != "dir":
             return recs, bad
-        for ns_dir in sorted(p for p in root.iterdir() if path_kind(p) == "dir"):
+        try:
+            ns_dirs = sorted(p for p in root.iterdir() if path_kind(p) == "dir")
+        except OSError as e:
+            return recs, [f"{root}: cannot be listed: {e.strerror or e}"]
+        for ns_dir in ns_dirs:
             d = ns_dir / "records"
-            if path_kind(d) != "dir":
+            try:
+                files = list_json(d)
+            except OSError as e:
+                bad.append(f"{ns_dir.name}/records: cannot be listed: {e.strerror or e}")
                 continue
-            for f in sorted(d.glob("*.json")):
+            for f in files:
                 if f.name == "index.json":
                     continue
                 rec = self._read_record(f)
