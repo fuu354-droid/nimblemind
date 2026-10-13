@@ -30,7 +30,8 @@ def test_unconvertible_user_toml_is_a_config_error(tmp_path, user_config, capsys
     assert "config error" in capsys.readouterr().err
 
 
-def test_unconvertible_user_toml_does_not_break_the_data_home_lookup(tmp_path, user_config, monkeypatch):
+@pytest.mark.parametrize("value", ["9" * 5000, "[" * 900 + "]" * 900])
+def test_unconvertible_user_toml_does_not_break_the_data_home_lookup(tmp_path, user_config, monkeypatch, value):
     monkeypatch.delenv("NIMBLEMIND_HOME")
-    user_config("home = " + "9" * 5000 + "\n")
+    user_config("home = " + value + "\n")
     assert paths.data_home() == paths.default_data_home()

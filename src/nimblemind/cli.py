@@ -328,9 +328,14 @@ def cmd_pending(args) -> int:
     if not shown:
         return 1
     by = confirm(f"Approve the {len(shown)} write(s) shown above into namespace {cfg.namespace!r}?")
+    # Re-read the config after the prompt, as approve's re-checks promise: a
+    # path set to deny, or an isolation rule added, while the prompt was open
+    # applies to these writes.
+    cfg_now = config_mod.load(_abs(getattr(args, "cwd", None) or logical_cwd()))
+    cfg_now.data["namespace"] = cfg.namespace
     for i, digest in shown.items():
         try:
-            r = writes.approve(cfg, i, by=by, expect_sha256=digest)
+            r = writes.approve(cfg_now, i, by=by, expect_sha256=digest)
             say(f"stored {r.source_id}" + (f": {r.detail}" if r.detail else ""))
         except ValueError as e:
             failed += 1

@@ -203,7 +203,8 @@ class MemilaBackend:
             raise BackendError(f"backend url {url!r} must be http or https")
         timeout = spec.get("timeout", 30)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
-                or not math.isfinite(timeout) or not 0 < timeout <= MAX_TIMEOUT:
+                or (isinstance(timeout, float) and not math.isfinite(timeout)) \
+                or not 0 < timeout <= MAX_TIMEOUT:
             raise BackendError(f"backend.timeout must be a positive number of seconds, "
                                f"at most {MAX_TIMEOUT}")
         forbidden = spec.get("forbidden_endpoints") or []

@@ -249,8 +249,17 @@ def _check_narrowable(data: dict) -> None:
     _check_timeout("isolation", iso.get("timeout"))
 
 
+def _finite_number(v) -> bool:
+    """A real number that compares safely: not a bool, and for floats
+    finite. Ints are never passed to math.isfinite, which overflows on a
+    TOML integer too large for a float; range checks bound them instead."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    return math.isfinite(v) if isinstance(v, float) else True
+
+
 def _check_timeout(section: str, t) -> None:
-    if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) \
+    if not _finite_number(t) \
             or not 0 < t <= MAX_TIMEOUT:
         raise ConfigError(f"{section}.timeout must be a positive number of seconds, "
                           f"at most {MAX_TIMEOUT}")
@@ -273,8 +282,7 @@ def _validate(data: dict) -> None:
         if not isinstance(j.get(k), str):
             raise ConfigError(f"journal.{k} must be a string")
     floor = data["curiosity"].get("confidence_floor")
-    if isinstance(floor, bool) or not isinstance(floor, (int, float)) \
-            or not math.isfinite(floor) or not 0 <= floor <= 100:
+    if not _finite_number(floor) or not 0 <= floor <= 100:
         raise ConfigError("curiosity.confidence_floor must be a number from 0 to 100")
     for p, level in data["approval"].items():
         if p not in APPROVAL_PATHS:
@@ -528,10 +536,8 @@ def load(cwd: Path | str | None = None) -> Config:
                     # The project, not the user, asked for a command check;
                     # an empty user command is then simply absent.
                     data["isolation"]["project_added_command"] = True
-            if "timeout" in iso and (isinstance(iso["timeout"], bool)
-                                     or not isinstance(iso["timeout"], (int, float))
-                                     or not math.isfinite(iso["timeout"])
-                                     or iso["timeout"] <= 0):
+            if "timeout" in iso and (not _finite_number(iso["timeout"])
+                                     or not 0 < iso["timeout"] <= MAX_TIMEOUT):
                 raise ConfigError(f"{project_file}: isolation.timeout must be a positive number")
             if isinstance(iso.get("timeout"), (int, float)) and iso["timeout"] > 0:
                 data["isolation"]["timeout"] = min(data["isolation"]["timeout"], iso["timeout"])
