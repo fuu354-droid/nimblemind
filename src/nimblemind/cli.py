@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -76,9 +77,16 @@ def cmd_hook(args) -> int:
         if args.event == "session-start":
             block = recall.assemble(cfg)
             if block:
-                print(h.session_start_output(block))
+                try:
+                    print(h.session_start_output(block))
+                    sys.stdout.flush()  # here, not at exit: a full or closed stdout is caught
+                except (OSError, ValueError):
+                    # What is still buffered would fail again at interpreter
+                    # exit and turn the exit status non-zero; drop it.
+                    sys.stdout = open(os.devnull, "w")
+                    raise
         elif args.event == "session-end":
-            distill.hook(cfg, payload)
+            distill.hook(cfg, payload, harness_name=h.name)
     except Exception as e:  # never break the session; leave a trace instead
         try:
             from nimblemind.fsutil import append_line
@@ -96,6 +104,8 @@ def cmd_distill(args) -> int:
     from nimblemind import distill
 
     cfg = config_mod.load(args.cwd or None)
+    if args.harness:
+        cfg.data["harness"] = args.harness
     try:
         distill.distill(cfg, args.transcript, args.session_id)
     except Exception as e:
@@ -113,7 +123,15 @@ def cmd_store(args) -> int:
     content = args.text if args.text is not None else sys.stdin.read()
     if not content.strip():
         raise SystemExit("nothing to store")
-    by = confirm(f"Store this {args.kind} in namespace {cfg.namespace!r}?") if args.approve else ""
+    by = ""
+    if args.approve:
+        # Isolation first: a person is never asked to approve what the check
+        # would refuse anyway (DESIGN.md section 7). A refused write goes on
+        # to `write`, which holds it.
+        from nimblemind import isolation
+
+        if isolation.check(content, cfg.namespace, cfg).ok:
+            by = confirm(f"Store this {args.kind} in namespace {cfg.namespace!r}?")
     r = writes.write(cfg, "cli", args.kind, content, source_id=args.source_id or "",
                      metadata={}, approved_by=by)
     _out(args, r.__dict__, f"{r.state} {r.source_id}" + (f": {r.detail}" if r.detail else ""))
@@ -311,8 +329,12 @@ def cmd_migrate(args) -> int:
 
     cfg = _cfg(args)
     if not args.dry_run:
-        confirm(f"Import every passing file in {args.source} into namespace {cfg.namespace!r}?")
-    lines = migrate.run(cfg, Path(args.source).expanduser(), args.kind, dry_run=args.dry_run)
+        confirm(f"Import every passing file in {args.from_dir or args.source} "
+                f"into namespace {cfg.namespace!r}?")
+    source = args.from_dir or args.source
+    if not source:
+        raise SystemExit("migrate needs a source directory (positional, or --from)")
+    lines = migrate.run(cfg, Path(source).expanduser(), args.kind, dry_run=args.dry_run)
     print("\n".join(lines) or "(no files)")
     return 1 if any(ln.startswith("FAIL") for ln in lines) else 0
 
@@ -340,6 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--transcript", required=True)
     d.add_argument("--session-id", default="unknown")
     d.add_argument("--cwd", default="")
+    d.add_argument("--harness", default="", help="the harness the hook used (set by session-end)")
     d.set_defaults(fn=cmd_distill)
 
     s = common(sub.add_parser("store", help="store a note through isolation and approval"))
@@ -390,7 +413,8 @@ def build_parser() -> argparse.ArgumentParser:
     common(sub.add_parser("config", help="show the effective config and locations")).set_defaults(fn=cmd_config)
 
     m = common(sub.add_parser("migrate", help="import from an older on-disk layout"), json_flag=False)
-    m.add_argument("source")
+    m.add_argument("source", nargs="?")
+    m.add_argument("--from", dest="from_dir", help="the source directory (same as the positional)")
     m.add_argument("--kind", default="journal", choices=["journal", "answer"])
     m.add_argument("--dry-run", action="store_true")
     m.set_defaults(fn=cmd_migrate)

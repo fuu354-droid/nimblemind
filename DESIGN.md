@@ -191,7 +191,8 @@ Backends:
   by token overlap count and then recency; an empty query returns the newest
   records. That is matching and ordering, not a retrieval model, and it is the
   floor the non-goal allows.
-- `memila`: HTTP to a memila instance (`/ingest`, `/retrieve`, `/delete`),
+- `memila`: HTTP to a memila instance (`POST /ingest`, `POST /retrieve`,
+  `DELETE /source`),
   configured by `MEMILA_URL` and `MEMILA_API_KEY`, then `~/.config/memila.env`.
   `forbidden_endpoints` in its config refuses named hosts and ports before a
   socket opens (the origin workspace uses it to keep personal memory off a
@@ -387,8 +388,9 @@ not a dependency.
 
 ## 13. Migration from the origin workspace
 
-`nimblemind migrate --from <dir>` imports journals and answers from an older
-layout (the origin's `~/.claude/brain/journals` and `~/.claude/curiosity`).
+`nimblemind migrate --from <dir>` (or `migrate <dir>`) imports journals and
+answers from an older layout (the origin's `~/.claude/brain/journals` and
+`~/.claude/curiosity`).
 Imported files already passed that workspace's gate, so each gets an approval
 entry with `rule: "migrated"` and its hash, and the source is left in place
 for the person to delete. Quarantined and unscanned files import into `held/`.

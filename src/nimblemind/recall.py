@@ -42,6 +42,8 @@ def latest_journal(cfg):
 
 def older(cfg, exclude: str, k: int) -> list[str]:
     """Up to k recall snippets, never the journal already shown in full."""
+    if k <= 0:
+        return []
     try:
         hits = writes.recall_backend(cfg).recall(RECALL_QUERY, cfg.namespace, k + 1)
     except BackendError:
@@ -50,7 +52,11 @@ def older(cfg, exclude: str, k: int) -> list[str]:
     for ev in hits:
         if ev.source_id == exclude:
             continue
-        view = journal.recall_view(cfg, ev.content) or ev.content
+        view = journal.recall_view(cfg, ev.content)
+        if not view:
+            if journal.is_journal(cfg, ev.content):
+                continue  # a journal whose recall sections are all empty adds nothing
+            view = ev.content  # a note or an answer has no sections: shown as is
         out.append(f"[{ev.source_id[:100]}] {view.strip()}")
         if len(out) >= k:
             break

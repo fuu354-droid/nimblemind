@@ -82,6 +82,13 @@ def section(text: str, name: str) -> str:
     return "\n".join(body).strip()
 
 
+def is_journal(cfg, text: str) -> bool:
+    """Whether `text` is shaped like a journal: it carries any configured
+    section header."""
+    lines = set(text.splitlines())
+    return any(h in lines for h in headers(cfg))
+
+
 def recall_view(cfg, text: str) -> str:
     """What recall shows of an older journal: its recall sections only."""
     parts = []

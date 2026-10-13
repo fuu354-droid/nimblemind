@@ -27,10 +27,14 @@ def _log(cfg, msg: str) -> None:
     append_line(cfg.layout().logs / "distill.log", f"{now_iso()} {msg}")
 
 
-def spawn(transcript_path: str, session_id: str, cwd: str) -> None:
-    """Start the distill child, detached from the hook's process group."""
+def spawn(transcript_path: str, session_id: str, cwd: str, harness_name: str = "") -> None:
+    """Start the distill child, detached from the hook's process group. The
+    hook's effective harness is passed on, so a `--harness` override on the
+    hook command reaches the child that reads the transcript."""
     argv = [sys.executable, "-m", "nimblemind", "distill",
             "--transcript", transcript_path, "--session-id", session_id, "--cwd", cwd]
+    if harness_name:
+        argv += ["--harness", harness_name]
     kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
                     "stderr": subprocess.DEVNULL, "close_fds": True}
     if sys.platform == "win32":
@@ -85,11 +89,12 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
     return result.state
 
 
-def hook(cfg, payload: dict) -> None:
+def hook(cfg, payload: dict, harness_name: str = "") -> None:
     """SessionEnd: never blocks, never raises."""
     if model.is_child():
         return
     transcript = payload.get("transcript_path", "")
     if not transcript or not os.path.isfile(transcript):
         return
-    spawn(transcript, payload.get("session_id", "unknown"), payload.get("cwd", ""))
+    spawn(transcript, payload.get("session_id", "unknown"), payload.get("cwd", ""),
+          harness_name or cfg["harness"])

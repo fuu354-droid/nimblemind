@@ -78,15 +78,20 @@ def _save_entry(directory: Path, entry: dict) -> str:
 def _store(cfg, rec: Record) -> str:
     """Canonical copy first, then the index backend. Returns a detail note."""
     canonical(cfg).store(rec)
-    idx = index_backend(cfg)
-    if idx is None:
+    if cfg["backend"].get("name", "local") == "local":
         return ""
+    # Loading the backend can fail too (a plugin that does not import, a bad
+    # setting), and that failure must not escape after the canonical copy is
+    # written: the caller still has to log the approval, and the record still
+    # has to be retried by `flush`.
     try:
+        idx = index_backend(cfg)
         idx.store(rec)
         return ""
-    except backends_mod.BackendError as e:
+    except Exception as e:
         _mark_unsynced(cfg, rec.source_id, rec.namespace)
-        return f"stored locally; {idx.name} send failed ({e}), `nimblemind flush` retries it"
+        return (f"stored locally; backend send failed ({type(e).__name__}: {e}), "
+                "`nimblemind flush` retries it")
 
 
 def _unsynced_file(cfg, namespace: str) -> Path:
@@ -305,11 +310,14 @@ def delete(cfg, source_id: str, namespace: str = "") -> bool:
 def flush(cfg, namespace: str = "") -> tuple[int, int]:
     """Resend records the index backend missed. Returns (sent, failed)."""
     namespace = namespace or cfg.namespace
-    idx = index_backend(cfg)
     f = _unsynced_file(cfg, namespace)
-    if idx is None:
+    if cfg["backend"].get("name", "local") == "local":
         f.unlink(missing_ok=True)
         return 0, 0
+    try:
+        idx = index_backend(cfg)
+    except Exception as e:
+        raise backends_mod.BackendError(f"backend did not load: {type(e).__name__}: {e}") from None
     with file_lock(f.with_suffix(".lock")):
         try:
             ids = json.loads(read_text(f))
@@ -324,7 +332,7 @@ def flush(cfg, namespace: str = "") -> tuple[int, int]:
             try:
                 idx.store(rec)
                 sent += 1
-            except backends_mod.BackendError:
+            except Exception:
                 left.append(sid)
         atomic_write(f, json.dumps(left) + "\n")
     return sent, len(left)
