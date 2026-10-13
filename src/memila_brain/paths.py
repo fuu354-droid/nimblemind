@@ -75,7 +75,6 @@ class Layout:
         self.records = ns / "records"
         self.pending = ns / "pending"
         self.held = ns / "held"
-        self.journals = ns / "journals"
         self.curiosity = home / "curiosity" / safe_name(namespace)
         self.approvals = home / "approvals.jsonl"
         self.logs = home / "logs"

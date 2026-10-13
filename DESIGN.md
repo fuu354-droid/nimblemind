@@ -69,16 +69,24 @@ Data home layout:
 ```
 <home>/
   namespaces/<ns>/
-    records/            local backend: one file per record, plus index.json
+    records/            canonical copy of every stored record, plus index.json
     pending/            writes awaiting approval; never read by recall
     held/               writes the isolation check refused or could not judge
+    unsynced.json       records a non-local backend has not received yet
   curiosity/<ns>/
     gaps.jsonl          the gap queue, unless a project config points elsewhere
     answers/
   approvals.jsonl       append-only approval log (section 7)
-  logs/                 distill.log, research.log, hook.log
+  trusted-projects.json project configs a person trusted, by content hash
+  logs/                 write.log, distill.log, hook.log
   locks/
 ```
+
+`<ns>` is the namespace escaped to one portable path component: only
+lowercase ASCII letters, digits, `-` and `_` pass through, everything else is
+a fixed-width `%` escape (uppercase too, since Windows and macOS compare names
+case-insensitively), and an `ns-` prefix keeps names like `con` off the
+names Windows reserves.
 
 ## 4. Configuration
 
@@ -86,9 +94,21 @@ TOML, read with the standard library's `tomllib`, so a person can comment a
 hand-written config and no third-party parser is needed.
 Precedence, lowest first: built-in defaults, user config, project config,
 environment variables (`MEMILA_BRAIN_<SECTION>_<KEY>`, for scalar keys only).
-A project config can narrow what a user config allows (approval, isolation,
-budget) but never widen it: for those three sections the stricter of the two
-values wins, so a repository a person clones cannot grant itself write access.
+A project config arrives with whatever repository a person cloned, so it is
+not trusted the way the user's own file is:
+
+- In the narrowing sections (`approval`, `budget`, and the pattern parts of
+  `isolation`) it can only narrow what the user config allows, never widen
+  it: the stricter value wins, so a repository cannot grant itself write
+  access or a bigger injection. This holds even for a trusted project.
+- Every key that runs a command, loads code, chooses where data is sent or
+  which memory pool a session reads (`namespace`, `harness`, `backend`, the
+  distiller and researcher, `isolation.command`, `curiosity.gaps_file` and
+  `curiosity.after_run`) applies only once a person has trusted that exact
+  file with `memila-brain trust`, at a terminal. Trust is recorded by
+  content hash, so an edit or a pulled change drops it until it is given
+  again. An untrusted file's other keys still apply, and the dropped ones are
+  named on stderr.
 
 ```toml
 namespace = "default"
@@ -173,9 +193,12 @@ Backends:
 - Third party: `name = "plugin"` with `target = "package.module:Class"` loads any
   class implementing the protocol. This is the inward provider direction.
 
-Journals on disk stay the source of truth for every backend: the local backend
-is those files, and `memila-brain reindex` rebuilds any other backend from
-them.
+Every stored record keeps a canonical copy in the local record store,
+whatever backend is configured, so listing, auditing and rebuilding never
+depend on a server. A non-local backend receives the record as well; a
+failed send is listed in `unsynced.json` and `memila-brain flush` retries it.
+Records are ordered by a microsecond creation stamp, so "the newest journal"
+is well defined even for two writes inside one second.
 
 ## 6. The write path
 
@@ -190,8 +213,9 @@ Nothing else in the package calls `Backend.store`.
 2. Approval (section 7). `deny`: rejected and logged. `ask`: the content goes
    to `pending/` with its hash, logged `pending`. `allow`: an approval entry
    is written naming the config rule, then step 3.
-3. `Backend.store`. A backend failure leaves the approved record in
-   `pending/` marked approved, and `memila-brain flush` retries it.
+3. Storage: the canonical local copy, then the configured backend when it
+   is not `local`. A failure of that second send leaves the record stored
+   locally and listed for `memila-brain flush`.
 
 `pending/` and `held/` are never read by recall, on any backend.
 
@@ -202,8 +226,14 @@ Nothing else in the package calls `Backend.store`.
   being in the background; only a person's command or an explicit `allow`
   rule for that exact path stores anything.
 - `memila-brain pending list|show <id>|approve <id>...|reject <id>...`.
-  `approve --all --path distill` exists, and still writes one approval entry
-  per record.
+- Every command that approves (`pending approve`, `store --approve`,
+  `migrate`, `trust`) reads a typed `yes` from an interactive terminal and
+  refuses without one. An agent driving a shell has no terminal, so it can
+  queue writes but cannot approve its own; the scripted alternative is an
+  `allow` rule in the user's own config, which a project config cannot set.
+- Approving re-runs the isolation check (config may have changed since the
+  write was queued) and refuses a pending entry whose content no longer
+  matches the hash taken when it was queued.
 - `approvals.jsonl` gets one line per stored record: `{source_id, namespace,
   path, sha256, approved_by, approved_at, rule}`. `approved_by` is the OS user
   for a command, or `config:<file>#approval.<path>` for an allow rule.
@@ -258,8 +288,9 @@ Harness hooks, chosen by `harness`:
 - `memila-brain hook session-start`: recall, prints the harness's injection
   format.
 - `memila-brain hook session-end`: detaches a distill process and returns.
-- `memila-brain hook prompt`: per-prompt recall with the prompt as the query
-  (the origin workspace's `/augment` hook moves here, as a backend call).
+- `memila-brain hook prompt` (v0.2.0): per-prompt recall with the prompt as
+  the query, capped at `budget.prompt_chars` (the origin workspace's
+  `/augment` hook moves here, as a backend call).
 
 Harness adapters translate payloads and transcripts: `claude-code` (hook JSON,
 JSONL transcript) and `generic` (plain text on stdin, text out). An adapter is

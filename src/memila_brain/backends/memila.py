@@ -133,6 +133,6 @@ class MemilaBackend:
         return True
 
     def list(self, namespace: str) -> list[Record]:
-        # memila has no listing endpoint; the journals on disk are the source
-        # of truth for every backend, and `reindex` rebuilds from them.
-        raise BackendError("the memila backend cannot list records; list the local journals instead")
+        # memila has no listing endpoint. The canonical local copy that every
+        # write keeps (writes.py) is what `memila-brain list` reads instead.
+        raise BackendError("the memila backend cannot list records; the canonical local copy can")
