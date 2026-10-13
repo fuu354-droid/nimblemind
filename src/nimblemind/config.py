@@ -199,6 +199,9 @@ def _narrow(user: dict, project: dict) -> dict:
                               "non-negative integer")
         out["budget"][k] = min(out["budget"][k], v)
     iso = project.get("isolation") or {}
+    unknown = set(iso) - {"checks", "deny", "identity", "command", "timeout"}
+    if unknown:
+        raise ConfigError(f"project isolation has unknown keys: {', '.join(sorted(unknown))}")
     for key in ("checks", "deny"):
         if key in iso and not (isinstance(iso[key], list) and all(isinstance(x, str) for x in iso[key])):
             raise ConfigError(f"project isolation.{key} must be a list of strings")
@@ -237,6 +240,10 @@ def _validate(data: dict) -> None:
     if not isinstance(data["namespace"], str) or not data["namespace"]:
         raise ConfigError("namespace: must be a non-empty string")
     paths.safe_name(data["namespace"])
+    ident = data["isolation"].get("identity")
+    if not isinstance(ident, dict) or not all(
+            isinstance(v, list) and all(isinstance(x, str) for x in v) for v in ident.values()):
+        raise ConfigError("isolation.identity must map each namespace to a list of strings")
     known = {"builtin-secrets", "builtin-patterns", "command"}
     for c in data["isolation"]["checks"]:
         if c not in known:
@@ -400,6 +407,10 @@ def load(cwd: Path | str | None = None) -> Config:
         if tables:
             raise ConfigError(f"{project_file}: {', '.join(tables)} must be a table")
         narrowing = {k: project.pop(k) for k in NARROWING if k in project}
+        for p, level in (narrowing.get("approval") or {}).items():
+            if level == "allow":
+                notes.append(f"{project_file}: approval.{p} = \"allow\" ignored; a project "
+                             "config can only tighten approval")
         bad = [k for k, v in narrowing.items() if not isinstance(v, dict)]
         if bad:
             raise ConfigError(f"{project_file}: {', '.join(bad)} must be a table")
@@ -419,6 +430,10 @@ def load(cwd: Path | str | None = None) -> Config:
                 data["isolation"]["project_command"] = iso["command"]
                 if "command" not in data["isolation"]["checks"]:
                     data["isolation"]["checks"].append("command")
+            if "timeout" in iso and (isinstance(iso["timeout"], bool)
+                                     or not isinstance(iso["timeout"], (int, float))
+                                     or iso["timeout"] <= 0):
+                raise ConfigError(f"{project_file}: isolation.timeout must be a positive number")
             if isinstance(iso.get("timeout"), (int, float)) and iso["timeout"] > 0:
                 data["isolation"]["timeout"] = min(data["isolation"]["timeout"], iso["timeout"]) \
                     if data["isolation"].get("timeout") else iso["timeout"]

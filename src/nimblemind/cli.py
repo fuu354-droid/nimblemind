@@ -61,8 +61,23 @@ def _cfg(args) -> config_mod.Config:
 # will be stored; `\r\x1b[2K` or a run of tag characters would otherwise
 # hide part of it.
 def visible(text: str) -> str:
-    return "".join(ch if ch in "\n\t" or ch.isprintable() else f"\\u{ord(ch):04x}"
-                   for ch in str(text))
+    return "".join(ch if ch in "\n\t" or (ch.isprintable() and not _ignorable(ord(ch)))
+                   else f"\\u{ord(ch):04x}" for ch in str(text))
+
+
+# Unicode's Default_Ignorable_Code_Point: characters a terminal draws as
+# nothing even where Python calls them printable (variation selectors,
+# combining grapheme joiner, Hangul fillers, Mongolian free variation
+# selectors), so a run of them could carry a hidden message.
+_IGNORABLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+              (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+              (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+              (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
+              (0xE0000, 0xE0FFF))
+
+
+def _ignorable(cp: int) -> bool:
+    return any(lo <= cp <= hi for lo, hi in _IGNORABLE)
 
 
 def say(*parts, file=None) -> None:

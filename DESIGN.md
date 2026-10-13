@@ -120,7 +120,8 @@ not trusted the way the user's own file is:
 - In the narrowing sections (`approval`, `budget`, and the pattern parts of
   `isolation`) it can only narrow what the user config allows, never widen
   it, and a value there of the wrong type or an unknown key is a config
-  error rather than silently ignored: the stricter value wins, so a repository cannot grant itself write
+  error rather than silently ignored (an `allow` is ignored and named on
+  stderr, as in the user config): the stricter value wins, so a repository cannot grant itself write
   access or a bigger injection. This holds even for a trusted project.
 - Every key that runs a command, loads code, chooses where data is sent or
   which memory pool a session reads (`namespace`, `harness`, `backend`, the
@@ -273,9 +274,10 @@ Nothing else in the package calls `Backend.store`.
 - `pending approve` shows each entry (path, kind, source id, hash, content)
   before asking, and stores exactly what was shown; `store --approve`
   shows the record the same way before it asks. Every text the CLI prints
-  shows each non-printable character (controls, format characters such as
-  zero-width spaces and Unicode tag characters, bidirectional overrides,
-  line separators; newline and tab excepted) as a visible `\uXXXX` escape,
+  shows each non-printable or default-ignorable character (controls,
+  format characters such as zero-width spaces and Unicode tag characters,
+  bidirectional overrides, line separators, variation selectors, Hangul
+  fillers; newline and tab excepted) as a visible `\uXXXX` escape,
   so content cannot hide part of itself; `--json` output carries the exact
   text. It refuses an entry that
   does not match its anchor in `pending.jsonl` (namespace and hash, written
