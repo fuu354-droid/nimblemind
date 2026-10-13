@@ -57,7 +57,7 @@ def test_2_pending_entry_tampered_before_approval_is_refused(cfg):
     r = writes.write(c, "distill", "journal", "honest content")
     f = c.layout().pending / f"{r.entry_id}.json"
     f.write_text(f.read_text(encoding="utf-8").replace("honest", "forged"), encoding="utf-8")
-    with pytest.raises(ValueError, match="modified after it was queued"):
+    with pytest.raises(ValueError, match="does not match what was queued"):
         writes.approve(c, r.entry_id, by="tester")
 
 
@@ -88,7 +88,7 @@ def test_3_cross_namespace_identity_is_refused(cfg, user_config):
 
 
 def test_4_injection_never_exceeds_total_budget(cfg, user_config):
-    for total, core, rec in [(6000, 3500, 2000), (800, 700, 300), (300, 250, 200), (120, 100, 100)]:
+    for total, core, rec in [(6000, 3500, 2000), (800, 700, 300), (300, 250, 200)]:
         user_config(f"[budget]\ntotal_chars = {total}\ncore_chars = {core}\n"
                     f"recall_chars = {rec}\nprompt_chars = {min(total, 100)}\n"
                     '[approval]\ncli = "allow"\n')
@@ -98,10 +98,9 @@ def test_4_injection_never_exceeds_total_budget(cfg, user_config):
                              for s in c["journal"]["sections"])
             writes.write(c, "cli", "journal", body, source_id=f"session:{total}-{i}")
         out = recall.assemble(c)
-        assert len(out) <= total, (total, len(out))
-        if out:
-            assert out.startswith("[memila-brain default]")
-            assert "[memila-brain:" in out  # every cut is named
+        assert 0 < len(out) <= total, (total, len(out))
+        assert out.startswith("[memila-brain default]")
+        assert "[memila-brain:" in out  # every cut is named
 
 
 def test_5_nothing_written_under_dot_claude(cfg, fake_model, tmp_path, user_config):

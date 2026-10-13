@@ -46,6 +46,19 @@ def _addresses(host: str) -> set[str]:
         return set()
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect. A redirect would reach a host the forbidden
+    check never saw, carrying the API key with it; memila never redirects,
+    so one is treated as a failure, not followed."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code,
+                                     f"redirect to {newurl} refused", headers, fp)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def is_forbidden(url: str, forbidden: list[str]) -> bool:
     parts = urllib.parse.urlsplit(url)
     try:
@@ -55,6 +68,7 @@ def is_forbidden(url: str, forbidden: list[str]) -> bool:
     host = parts.hostname or ""
     for entry in forbidden:
         f_host, _, f_port = entry.rpartition(":")
+        f_host = f_host.strip("[]")  # "[::1]:6500" names the host ::1
         if not f_port.isdigit() or int(f_port) != port:
             continue
         if not f_host:
@@ -90,10 +104,10 @@ class MemilaBackend:
         req = urllib.request.Request(self.url + path, data=json.dumps(body).encode(),
                                      headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
+            with _OPENER.open(req, timeout=timeout or self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
-            raise BackendError(f"{method} {path}: HTTP {e.code}") from None
+            raise BackendError(f"{method} {path}: HTTP {e.code} {e.reason}") from None
         except (urllib.error.URLError, OSError) as e:
             raise BackendError(f"{method} {path}: {type(e).__name__}: {e}") from None
         try:

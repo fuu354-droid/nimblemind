@@ -6,12 +6,17 @@ platform default. Nothing here names a user, a machine or a repository.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
 
 APP = "memila-brain"
 PROJECT_CONFIG = ".memila-brain.toml"
+# Longest escaped namespace kept verbatim in a path component. Short enough
+# that the deepest file under a namespace stays far below Windows' 260
+# character path limit from any ordinary data home.
+MAX_COMPONENT = 48
 
 
 def _env_path(name: str) -> Path | None:
@@ -103,4 +108,13 @@ def safe_name(namespace: str) -> str:
             out.append("%%%02X" % ord(ch))
         else:
             out.append("%%u%06X" % ord(ch))
-    return "ns-" + "".join(out)
+    name = "".join(out)
+    if len(name) > MAX_COMPONENT:
+        # Long or heavily escaped names keep a readable prefix and end in a
+        # hash of the full namespace, so the component stays well inside
+        # every filesystem's name limit and Windows path limits. `~` never
+        # appears in an escaped name, so a hashed name cannot equal a short
+        # one.
+        digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:20]
+        name = name[:MAX_COMPONENT - 21] + "~" + digest
+    return "ns-" + name

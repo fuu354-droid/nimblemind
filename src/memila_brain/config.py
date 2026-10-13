@@ -1,8 +1,11 @@
 """Configuration: defaults, user config, environment, project config
 (DESIGN.md section 4).
 
-Layers, lowest first: built-in defaults, the user config file, environment
-variables, then the project config found from the session's directory.
+Layers, lowest first: built-in defaults, the user config file, the project
+config found from the session's directory, then environment variables
+(`MEMILA_BRAIN_<SECTION>_<KEY>`). Two exceptions: environment values for the
+narrowing sections apply at the user's level, so a project still narrows
+them, and `approval` is never read from the environment at all.
 
 A project config arrives with whatever repository a person cloned, so it is
 not trusted the way the user's own file is:
@@ -86,6 +89,12 @@ class Config:
     def __getitem__(self, key):
         return self.data[key]
 
+    def approval_source(self, path: str) -> str:
+        """Where the level for `path` came from, for the approval log. An
+        `allow` can only come from the user's own config: the environment
+        never sets approval and a project can only narrow."""
+        return f"config:{paths.user_config()}#approval.{path}"
+
     @property
     def namespace(self) -> str:
         return self.data["namespace"]
@@ -122,9 +131,18 @@ def _coerce(raw: str, like):
     return raw
 
 
-def _env_layer(defaults: dict) -> dict:
+def _env_layer(defaults: dict, sections: tuple[str, ...] | None) -> dict:
+    """Environment overrides for the named top-level keys (all when None).
+
+    `approval` is never read from the environment: an agent can set a
+    variable on its own command line, and an approval it can grant itself is
+    no approval (DESIGN.md section 7). The only scripted way to `allow` a
+    path is the user's own config file.
+    """
     layer: dict = {}
     for key, value in defaults.items():
+        if key == "approval" or (sections is not None and key not in sections):
+            continue
         if isinstance(value, dict):
             for sub, subval in value.items():
                 if isinstance(subval, (dict, list)):
@@ -233,9 +251,16 @@ def is_trusted(project_file: Path) -> bool:
         return False
 
 
-def trust(project_file: Path) -> str:
+def trust(project_file: Path, expect: bytes | None = None) -> str:
+    """Trust `project_file`. With `expect`, the bytes the person was shown,
+    the file must still hold exactly those bytes, and their hash is what is
+    recorded: a file swapped while the prompt was open is refused."""
     project_file = project_file.resolve()
     digest = _digest(project_file)
+    if expect is not None:
+        shown = hashlib.sha256(expect).hexdigest()
+        if shown != digest:
+            raise ValueError(f"{project_file} changed after it was shown; not trusted")
     data = _trusted()
     data[str(project_file)] = digest
     atomic_write(_trust_file(), json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -255,7 +280,10 @@ def load(cwd: Path | str | None = None) -> Config:
     """The effective config for a session working in `cwd`."""
     notes: list[str] = []
     data = _merge(DEFAULTS, _load_toml(paths.user_config()))
-    data = _merge(data, _env_layer(DEFAULTS))
+    # The narrowing sections' environment values act at the user's level, so
+    # a project can still only narrow them; every other key's environment
+    # value sits above the project config (section 4's precedence).
+    data = _merge(data, _env_layer(DEFAULTS, NARROWING))
 
     project_file = paths.find_project_config(cwd)
     trusted = False
@@ -280,5 +308,13 @@ def load(cwd: Path | str | None = None) -> Config:
                 if k in iso:
                     data["isolation"][k] = iso[k]
 
+    data = _merge(data, _env_layer(DEFAULTS, tuple(k for k in DEFAULTS if k not in NARROWING)))
+    # A project may lower total_chars alone; the parts it bounds follow it
+    # down rather than turning an authorized narrowing into a config error.
+    b = data["budget"]
+    if project_file:
+        for k in ("core_chars", "recall_chars", "prompt_chars"):
+            if isinstance(b.get(k), int) and isinstance(b.get("total_chars"), int):
+                b[k] = min(b[k], b["total_chars"])
     _validate(data)
     return Config(data=data, project_file=project_file, project_trusted=trusted, notes=notes)

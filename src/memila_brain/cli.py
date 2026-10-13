@@ -147,8 +147,14 @@ def cmd_list(args) -> int:
 def cmd_delete(args) -> int:
     from memila_brain import writes
 
+    from memila_brain.backends import BackendError
+
     cfg = _cfg(args)
-    existed = writes.delete(cfg, args.source_id)
+    try:
+        existed = writes.delete(cfg, args.source_id)
+    except BackendError as e:
+        print(f"deleted locally; the backend did not confirm: {e}")
+        return 1
     print(("deleted " if existed else "no such record ") + args.source_id)
     return 0 if existed else 1
 
@@ -177,11 +183,23 @@ def cmd_pending(args) -> int:
             writes.reject(cfg, i)
             print(f"rejected {i}")
         return 0
-    by = confirm(f"Approve {len(args.ids)} pending write(s) into namespace {cfg.namespace!r}?")
-    failed = 0
+    shown, failed = {}, 0
     for i in args.ids:
         try:
-            r = writes.approve(cfg, i, by=by)
+            e = writes.load_pending(cfg, i)
+        except ValueError as err:
+            failed += 1
+            print(f"FAIL {i}: {err}")
+            continue
+        rec = e["_record"]
+        shown[i] = rec.digest
+        print(f"== {i}  {e['path']}  {rec.source_id}  sha256 {rec.digest[:12]}\n{rec.content}")
+    if not shown:
+        return 1
+    by = confirm(f"Approve the {len(shown)} write(s) shown above into namespace {cfg.namespace!r}?")
+    for i, digest in shown.items():
+        try:
+            r = writes.approve(cfg, i, by=by, expect_sha256=digest)
             print(f"stored {r.source_id}" + (f": {r.detail}" if r.detail else ""))
         except ValueError as e:
             failed += 1
@@ -242,9 +260,14 @@ def cmd_trust(args) -> int:
     if args.revoke:
         print(("untrusted " if config_mod.untrust(path) else "was not trusted: ") + str(path))
         return 0
-    print(path.read_text(encoding="utf-8"))
+    shown = path.read_bytes()
+    print(shown.decode("utf-8", errors="replace"))
     confirm(f"Trust {path} to run the commands and choose the backend shown above?")
-    print(f"trusted {path} (sha256 {config_mod.trust(path)[:12]})")
+    try:
+        digest = config_mod.trust(path, expect=shown)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    print(f"trusted {path} (sha256 {digest[:12]})")
     return 0
 
 
@@ -346,7 +369,19 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _utf8_io() -> None:
+    """UTF-8 on stdin and stdout whatever the locale: hook payloads and
+    injected context are UTF-8 on every platform, and Windows pipes default
+    to a legacy code page that cannot even encode most of it."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_io()
     args = build_parser().parse_args(argv)
     try:
         return args.fn(args)

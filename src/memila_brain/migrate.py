@@ -54,21 +54,31 @@ def run(cfg, source: Path, kind: str, *, dry_run: bool = False) -> list[str]:
         if existing is not None and existing.digest == rec.digest:
             lines.append(f"skip {f.name}: already imported")
             continue
-        verdict = isolation.Verdict(isolation.REFUSED, "marked in the source layout") if marked \
-            else isolation.check(content, cfg.namespace, cfg)
         if dry_run:
+            verdict = isolation.Verdict(isolation.REFUSED) if marked \
+                else isolation.check(content, cfg.namespace, cfg)
             lines.append(f"would {'import' if verdict.ok else 'hold'} {f.name} as {rec.source_id}")
             continue
-        if not verdict.ok:
+        if marked:
+            # Judged and refused (or never judged) by the old layout's own
+            # gate: held as it was, never re-judged into storage here.
             writes._save_entry(cfg.layout().held, {
                 "record": rec.to_dict(), "path": "cli", "sha256": rec.digest,
-                "verdict": verdict.state, "report": verdict.report,
+                "verdict": isolation.REFUSED, "report": "marked in the source layout",
                 "held_at": rec.created_at,
             })
-            lines.append(f"held {f.name}: {verdict.report[:120]}")
+            lines.append(f"held {f.name}: marked in the source layout")
             continue
-        approval.record(cfg.layout().approvals, source_id=rec.source_id, namespace=cfg.namespace,
-                        path="cli", sha256=rec.digest, approved_by=who, rule="migrated")
-        detail = writes._store(cfg, rec)
-        lines.append(f"ok {f.name} -> {rec.source_id}" + (f" ({detail})" if detail else ""))
+        # The one write path: isolation, then this path's approval level
+        # (`deny` refuses here too), with the person who ran migrate as the
+        # approver.
+        r = writes.write(cfg, "cli", kind, content, source_id=rec.source_id,
+                         metadata=rec.metadata, approved_by=who, rule="migrated",
+                         created_at=rec.created_at)
+        if r.state == writes.STORED:
+            lines.append(f"ok {f.name} -> {rec.source_id}" + (f" ({r.detail})" if r.detail else ""))
+        elif r.state == writes.HELD:
+            lines.append(f"held {f.name}: {r.detail[:120]}")
+        else:
+            lines.append(f"FAIL {f.name}: {r.state}: {r.detail}")
     return lines

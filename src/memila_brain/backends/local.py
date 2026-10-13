@@ -174,6 +174,26 @@ class LocalBackend:
             self._write_index(namespace, index)
         return existed
 
+    def scan(self, namespace: str) -> tuple[list[Record], list[str]]:
+        """Every record file on disk for this namespace, bypassing the index,
+        plus the files that are not a readable record of this namespace.
+        What `audit` reads, so a record the index lost is still checked."""
+        d = self._dir(namespace)
+        recs, bad = [], []
+        if d.is_dir():
+            for f in sorted(d.glob("*.json")):
+                if f.name == "index.json":
+                    continue
+                rec = self._read_record(f)
+                if rec is None:
+                    bad.append(f"{f.name}: not a readable record")
+                elif rec.namespace != namespace or self._file(namespace, rec.source_id) != f:
+                    bad.append(f"{f.name}: holds {rec.namespace}/{rec.source_id}, "
+                               "which does not belong under this name")
+                else:
+                    recs.append(rec)
+        return recs, bad
+
     def list(self, namespace: str) -> list[Record]:
         index = self._read_index(namespace)["records"]
         recs = [r for sid in index if (r := self.get(sid, namespace)) is not None]
