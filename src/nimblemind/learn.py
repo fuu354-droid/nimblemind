@@ -204,7 +204,9 @@ def session_key(j: Record) -> str:
     """The unit of independence: the session a journal came from. A session
     distilled twice (a resumed session ends twice) is still one vote."""
     sid = j.metadata.get("session_id") if isinstance(j.metadata, dict) else None
-    if isinstance(sid, str) and sid:
+    # "unknown" is the placeholder for a payload with no session id: it names
+    # no session, so each such journal is its own vote.
+    if isinstance(sid, str) and sid and sid != "unknown":
         return "s:" + _token(sid)
     return "j:" + j.source_id
 

@@ -1466,3 +1466,65 @@ def test_r10_o1_the_same_line_as_lesson_and_ruling_is_two_items(cfg, user_config
     for _ in range(3):
         learn.run(c)
     assert sorted((r["origin"], r["pinned"]) for r in learn.report(c)) == [("lessons", False), ("ruling", True)]
+
+
+# ---- v0.2.0 regression round 1 --------------------------------------------
+
+def test_g1_f1_a_revision_in_hypothesis_is_injected_at_start(cfg, reviser):
+    reviser(statement=REV, applies="resuming the same task", not_when="a different task")
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    bid = one(c, L1)["bid"]
+    for i in (2, 3):
+        put(c, f"session:{i}", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
+    learn.run(c)
+    new = one(c, REV)
+    assert new["status"] == "hypothesis" and new["bid"] in recall.assemble(c)
+
+
+def test_g1_f2_reset_writes_nothing_even_with_unhandled_journals(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}", Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
+    before = (len(learn.stored(c, "belief")), len(writes.pending(c)))
+    learn.run(c, reset_state=True)
+    assert (len(learn.stored(c, "belief")), len(writes.pending(c))) == before
+
+
+def test_g1_f3_a_persons_opposite_ruling_is_no_support_for_the_learned_belief(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned="- always retry flaky network calls in the deploy script")
+    _person_journal(c, "session:2", Rulings="- never retry flaky network calls in the deploy script")
+    learn.run(c)
+    assert one(c, "always retry flaky network calls in the deploy script")["for"] == 1
+
+
+def test_g1_f4_journals_without_a_session_id_are_separate_votes(cfg, no_model):
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", metadata={"session_id": "unknown"}, Lessons_learned=f"- {text}")
+    learn.run(c)
+    assert one(c, L1)["for"] == 3
+
+
+def test_g1_o1_a_contradiction_without_a_drafter_carries_its_time(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nx\n\n## Confidence\n90\n", extra="[curiosity]\nverify_window = 2\n")
+    for p in ("research", "gap"):
+        config_mod.set_grant(p, True)
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    bid = one(c, L1)["bid"]
+    writes.write(c, "distill", "journal", jtext(Pitfalls=COUNTER), source_id="session:2",
+                 metadata={"beliefs_listed": [bid]})
+    put(c, "session:3", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
+    learn.run(c)                                   # challenged, no drafter: a contradiction gap
+    research.run(c, 1)
+    put(c, "session:4", Unfinished="- a")
+    put(c, "session:5", Unfinished="- b")
+    learn.run(c)
+    e = [x for x in writes.pending(c) if x["record"]["source_id"] == "session:2"][0]
+    writes.approve(c, e["id"], by="t")
+    learn.run(c)
+    assert [g["signal"] for g in research.ranked(c)].count("contradiction") == 1
