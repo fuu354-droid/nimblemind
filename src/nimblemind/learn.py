@@ -68,7 +68,7 @@ when where which while who whom why will with would you your yours yet still aga
 one two new use used using get got make made via per across within without
 """.split())
 
-_CHECK_LINE = re.compile(r"^-\s*(B-[0-9a-f]{8})\s*:\s*(followed|violated|n/a)\b", re.IGNORECASE)
+_CHECK_LINE = re.compile(r"^-\s*(B-[0-9a-f]{8})\s*:\s*(followed|violated|n/a)\s*(?::|$)", re.IGNORECASE)
 _TOKEN_STR = re.compile(r"^\S{1,300}$")
 _BID = re.compile(r"^B-[0-9a-f]{8}$")
 
@@ -589,8 +589,8 @@ def _belief_entry(w: _World, rec: Record, p: dict, done: dict[str, dict]) -> dic
     points = sorted({born, *(e["at"] for e in ev), *stale_marks,
                      *([retire_at] if retire_at else []), *([succ_at] if succ_at else [])}, key=_when)
     cause0 = sup or (meta_ev[0] if meta_ev else "") or "new"
-    history = [{"status": "hypothesis", "at": born, "cause": _token(cause0)}]
-    status = "hypothesis"
+    status = "supported" if pinned else "hypothesis"     # a person's word starts there
+    history = [{"status": status, "at": born, "cause": _token(cause0)}]
     for t in points:
         if after(born, t):
             continue

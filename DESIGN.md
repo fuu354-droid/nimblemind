@@ -264,7 +264,8 @@ is well defined even for two writes inside one second.
 ## 6. The write path
 
 Every persistence goes through `write(path, namespace, kind, content,
-metadata)`. `path` is one of `distill`, `research`, `gap`, `provider`, `cli`.
+metadata)`. `path` is one of `distill`, `research`, `gap`, `provider`, `cli`,
+`learn`.
 Nothing else in the package calls `Backend.store`.
 
 1. Isolation check (section 8). Refused: the content goes to `held/` with the
@@ -437,7 +438,7 @@ Harness hooks, chosen by `harness`:
   3. Nothing already injected into the same session (by session start or an
      earlier prompt) is injected again. The session's injected ids live in
      `<home>/run/sessions/<sha256 of the session id>.json`, ids only, and
-     files older than seven days are removed on the next hook run.
+     every hook run removes such files older than seven days.
   4. Silent on any failure, as every hook is.
 
 Harness adapters translate payloads and transcripts: `claude-code` (hook JSON,
@@ -457,7 +458,9 @@ Outward API (the provider direction): `nimblemind.api` exposes `store`,
 `recall`, `delete`, `gaps_add`, `gaps_list` and `beliefs_list`, every
 write routed through section 6 on path `provider`. A provider stores notes
 only: journals and answers carry metadata the learning loop reads as
-evidence, which another tool must not be able to mint. The CLI mirrors it with
+evidence, which another tool must not be able to mint. It names a new id or
+one of its own notes, and deletes only its own notes; every other record is
+the person's to replace or delete. The CLI mirrors it with
 `--json`. A Hermes-style memory provider built on this API is the first
 external integration test, under `integrations/hermes/`; it is a test, not a
 dependency.

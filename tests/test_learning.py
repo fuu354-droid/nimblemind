@@ -1246,3 +1246,61 @@ def test_r4_f4_a_late_old_journal_does_not_duplicate_a_verified_gap(cfg, user_co
     learn.run(c)
     gaps = research.ranked(c)
     assert len(gaps) == 1 and gaps[0]["status"] == "verified" and gaps[0]["occurrences"] == 3
+
+
+# ---- v0.2.0 round 6 findings ----------------------------------------------
+
+def test_r6_f1_a_provider_deletes_only_its_own_notes(cfg):
+    c = cfg()
+    bid = _person_belief(c)
+    with pytest.raises(ValueError):
+        api.delete(f"belief:{bid}")
+    assert one(c, L1)["pinned"]
+    config_mod.set_grant("provider", True)
+    saved = api.store("a provider note about qdrant")
+    assert api.delete(saved["source_id"]) is True
+    writes.write(c, "cli", "note", "the person's note", source_id="note:p", approved_by="t")
+    with pytest.raises(ValueError):
+        api.delete("note:p")
+
+
+def test_r6_f2_a_provider_cannot_overwrite_another_record(cfg):
+    config_mod.set_grant("provider", True)
+    c = cfg()
+    bid = _person_belief(c)
+    put(c, "session:1", Unfinished="- x")
+    for sid in (f"belief:{bid}", "session:1", "journal:j1"):
+        with pytest.raises(ValueError):
+            api.store("x", source_id=sid)
+    writes.write(c, "cli", "note", "the person's note", source_id="note:p", approved_by="t")
+    with pytest.raises(ValueError):
+        api.store("x", source_id="note:p")
+    first = api.store("v1", source_id="note:mine")
+    assert api.store("v2", source_id=first["source_id"])["state"] == "stored"
+
+
+def test_r6_f3_malformed_check_verdicts_are_dropped():
+    text = jtext() + ("## Belief checks\n- B-1a2b3c4d: followed-ish: x\n- B-1a2b3c4e: violated?!\n"
+                      "- B-1a2b3c4f: n/a.b\n- B-1a2b3c40: followed/violated: unsure\n- B-1a2b3c41: violated\n")
+    listed = {"B-1a2b3c4d", "B-1a2b3c4e", "B-1a2b3c4f", "B-1a2b3c40", "B-1a2b3c41"}
+    assert learn.belief_checks(text, listed) == {"belief:B-1a2b3c41": "violated"}
+
+
+def test_r6_f4_every_hook_run_prunes_old_session_files(cfg, tmp_path, monkeypatch):
+    import os
+    cfg()
+    old = recall._session_file("ancient")
+    old.parent.mkdir(parents=True, exist_ok=True)
+    old.write_text('{"ids": []}', encoding="utf-8")
+    past = time.time() - 8 * 86400
+    os.utime(old, (past, past))
+    assert _hook(monkeypatch, "prompt", {"session_id": "s", "cwd": str(tmp_path), "prompt": "hi"}) == ""
+    assert not old.exists()
+
+
+def test_r6_a_pinned_beliefs_history_starts_supported(cfg, no_model):
+    c = cfg()
+    bid = _person_belief(c)
+    learn.run(c)
+    h = learn.history(c, f"belief:{bid}")[0]["history"]
+    assert [x["status"] for x in h] == ["supported"]

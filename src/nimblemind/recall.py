@@ -224,20 +224,24 @@ def injected(session_id: str) -> set[str]:
     return {i for i in ids if isinstance(i, str)} if isinstance(ids, list) else set()
 
 
+def prune() -> None:
+    """Drop session files older than a week; every hook run calls it."""
+    d = data_home() / "run" / "sessions"
+    now = time.time()
+    for other in d.glob("*.json") if d.is_dir() else []:
+        try:
+            if now - other.stat().st_mtime > SESSION_TTL:
+                other.unlink()
+        except OSError:
+            pass
+
+
 def remember(session_id: str, ids: list[str]) -> None:
-    """Add `ids` to what this session has seen, and drop other sessions'
-    files older than a week."""
+    """Add `ids` to what this session has seen."""
     if not session_id or not ids:
         return
     f = _session_file(session_id)
     f.parent.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    for other in f.parent.glob("*.json"):
-        try:
-            if other != f and now - other.stat().st_mtime > SESSION_TTL:
-                other.unlink()
-        except OSError:
-            pass
     seen = injected(session_id) | set(ids)
     atomic_write(f, json.dumps({"ids": sorted(seen)}) + "\n")
     try:

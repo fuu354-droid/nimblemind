@@ -18,8 +18,9 @@ and the next session works from the corrected version.
   path standing approval with `nimblemind approval allow <path>`. Every
   stored record is logged with its hash, and `nimblemind audit` checks the
   store against that log.
-- **One injection budget.** The label, the last journal, older recall and any
-  truncation note all count against one cap, and every cut is named.
+- **One injection budget.** The label, the beliefs that apply, the last
+  session's unfinished work, older recall and any truncation note all count
+  against one cap, and every cut is named.
 
 ## Install
 
@@ -47,7 +48,7 @@ In `~/.claude/settings.json` (or a project's `.claude/settings.json`):
 }
 ```
 
-Both hooks always exit 0. A failure is written to `logs/hook.log` under the
+The hooks always exit 0. A failure is written to `logs/hook.log` under the
 data home and never reaches the session.
 
 Distilling uses the `claude` CLI with the `haiku` model alias by default. Any

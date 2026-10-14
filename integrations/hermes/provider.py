@@ -29,4 +29,9 @@ class NimblemindMemoryProvider:
                 for e in api.recall(query, limit, cwd=self.cwd, namespace=self.namespace)]
 
     def forget(self, memory_id: str) -> bool:
-        return api.delete(memory_id, cwd=self.cwd, namespace=self.namespace)
+        """Forget one of this provider's own memories; anything else is the
+        person's to delete, so it is refused (False)."""
+        try:
+            return api.delete(memory_id, cwd=self.cwd, namespace=self.namespace)
+        except ValueError:
+            return False
