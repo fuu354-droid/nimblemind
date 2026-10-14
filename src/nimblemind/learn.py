@@ -204,10 +204,11 @@ def session_key(j: Record) -> str:
     """The unit of independence: the session a journal came from. A session
     distilled twice (a resumed session ends twice) is still one vote."""
     sid = j.metadata.get("session_id") if isinstance(j.metadata, dict) else None
-    # "unknown" is the placeholder for a payload with no session id: it names
-    # no session, so each such journal is its own vote.
-    if isinstance(sid, str) and sid and sid != "unknown":
-        return "s:" + _token(sid)
+    # A placeholder ("unknown", blank, "null", ...) names no session, so each
+    # such journal is its own vote.
+    if isinstance(sid, str) and sid.strip() and sid.strip().lower() not in (
+            "unknown", "null", "none", "undefined", "nil"):
+        return "s:" + _token(sid.strip())
     return "j:" + j.source_id
 
 
@@ -497,6 +498,9 @@ class _World:
                 "surprises": [(i, content_tokens(i)) for _, i in items(j.content, lr["surprise_sections"])],
                 "changes": [content_tokens(i) for _, i in items(j.content, lr["change_sections"])],
                 "person": _person_approved(self.log, cfg.namespace, j.source_id),
+                # The hooks could not record what this session was shown, so
+                # it cannot be shown to be independent: no restatement vote.
+                "shown_unknown": meta.get("shown_unknown") is True,
             }
 
     def born(self, rec: Record) -> str:
@@ -562,7 +566,7 @@ def _belief_entry(w: _World, rec: Record, p: dict, done: dict[str, dict]) -> dic
                 continue
             if sec in lr["ruling_sections"] and pt["person"] and not pinned:
                 continue      # a ruling may say the opposite; it never adopts a learned belief
-            if not shown and sess not in derived_sessions:
+            if not shown and sess not in derived_sessions and not pt["shown_unknown"]:
                 ev.append({"dir": "for", "kind": "restated", "ref": j.source_id, "session": sess, "at": at})
         hit = any(similar(t, sig, th) for t in pt["bad"])
         if pt["checks"].get(sid) == "followed" and not hit:

@@ -668,6 +668,11 @@ takes over at its own birth (section 15.5).
 
 The unit of independence is the session (the journal's `session_id`): one
 session, one vote, however many journals it was distilled into. A session
+the harness sends no id for (or a placeholder such as `unknown`) is keyed
+by its transcript path, which the hooks and the distiller both see; when
+neither exists, or the hooks kept no record under that key, what the
+session was shown cannot be known, and its journal gives no `restated`
+vote. A session
 was shown a belief when the distiller listed it (`beliefs_listed`) or a hook
 injected it, or a record it was drawn from, into that session
 (`beliefs_shown`, `records_shown`, from the per-session record of section

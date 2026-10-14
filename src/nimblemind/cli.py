@@ -173,17 +173,17 @@ def cmd_hook(args) -> int:
             payload = h.read_payload(raw)
             cfg = config_mod.load(_hook_cwd(payload))
         cfg.data["harness"] = h.name
-        recall.prune(keep=payload.get("session_id", ""))
+        sid = recall.session_key_for(payload.get("session_id", ""), payload.get("transcript_path", ""))
+        recall.prune(keep=sid)
         if args.event in ("session-start", "prompt"):
-            sid = payload.get("session_id", "")
             if args.event == "session-start":
                 block, ids = recall.assemble_with_ids(cfg)
                 render = h.session_start_output
             else:
                 block, ids = recall.prompt_block(cfg, payload.get("prompt", ""), sid)
                 render = h.prompt_output
+            recall.remember(sid, ids if block else [])
             if block:
-                recall.remember(sid, ids)
                 try:
                     print(render(block))
                     sys.stdout.flush()  # here, not at exit: a full or closed stdout is caught

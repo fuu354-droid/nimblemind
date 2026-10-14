@@ -207,6 +207,22 @@ def assemble(cfg) -> str:
 
 # ---- per prompt ----------------------------------------------------------
 
+PLACEHOLDER_IDS = frozenset({"", "unknown", "null", "none", "undefined", "nil"})
+
+
+def session_key_for(session_id, transcript_path: str = "") -> str:
+    """The key a session's shown set is kept under: its id, or when the
+    harness sends none (or a placeholder), its transcript path, which the
+    hooks and the distill child both see; "" when neither exists."""
+    s = session_id.strip() if isinstance(session_id, str) else ""
+    if s and s.lower() not in PLACEHOLDER_IDS:
+        return s
+    if isinstance(transcript_path, str) and transcript_path.strip():
+        path = os.path.normpath(transcript_path) if os.path.isabs(transcript_path) else transcript_path
+        return "t:" + hashlib.sha256(path.encode("utf-8", "surrogatepass")).hexdigest()[:32]
+    return ""
+
+
 def _session_file(session_id: str):
     h = hashlib.sha256(session_id.encode("utf-8", "surrogatepass")).hexdigest()
     return data_home() / "run" / "sessions" / f"{h}.json"
@@ -244,9 +260,16 @@ def prune(keep: str = "") -> None:
             pass
 
 
+def recorded(session_id: str) -> bool:
+    """Whether a hook kept a record for this session at all."""
+    return bool(session_id) and _session_file(session_id).exists()
+
+
 def remember(session_id: str, ids: list[str]) -> None:
-    """Add `ids` to what this session has seen."""
-    if not session_id or not ids:
+    """Add `ids` to what this session has seen. Called by every hook run
+    that has a session key, with nothing to add too, so the record's
+    existence says the hooks could see this session."""
+    if not session_id:
         return
     f = _session_file(session_id)
     f.parent.mkdir(parents=True, exist_ok=True)

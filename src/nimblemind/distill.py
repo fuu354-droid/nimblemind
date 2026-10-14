@@ -103,7 +103,15 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
         _log(cfg, f"skip {session_id}: only {turns} human turns")
         return "skip"
 
-    listed, shown = _listed_beliefs(cfg, session_id)
+    from nimblemind import recall
+
+    # The key the hooks kept this session's shown set under (its id, else
+    # its transcript); none means what it was shown cannot be known.
+    key = recall.session_key_for(session_id, os.path.abspath(transcript_path))
+    # A key made from the transcript is only good if the hooks used it too.
+    if key.startswith("t:") and not recall.recorded(key):
+        key = ""
+    listed, shown = _listed_beliefs(cfg, key)
     system = journal.instructions(cfg, listed)
     extra, text = "", ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -124,13 +132,14 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
 
     sid = source_id_for(session_id)
     header = f"# Session journal {sid.removeprefix('session:')}\n\n"
-    meta = {"session_id": session_id}
+    meta = {"session_id": key or "unknown"}
+    if not key:
+        meta["shown_unknown"] = True
     if shown:
         meta["beliefs_shown"] = shown
     # Every record the hooks injected: a belief drawn from one of them (a
     # research answer) is not independently restated by this session.
-    from nimblemind import recall
-    seen = sorted(x for x in recall.injected(session_id) if x and len(x) <= 200 and not any(
+    seen = sorted(x for x in recall.injected(key) if x and len(x) <= 200 and not any(
         c.isspace() for c in x))
     if seen:
         meta["records_shown"] = seen
@@ -152,5 +161,5 @@ def hook(cfg, payload: dict, harness_name: str = "") -> None:
     transcript = payload.get("transcript_path", "")
     if not transcript or not os.path.isfile(transcript):
         return
-    spawn(transcript, payload.get("session_id", "unknown"), payload.get("cwd", ""),
+    spawn(transcript, payload.get("session_id", ""), payload.get("cwd", ""),
           harness_name or cfg["harness"])
