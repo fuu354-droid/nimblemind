@@ -385,6 +385,18 @@ def _pending(cfg, kind: str) -> list[Record]:
     return out
 
 
+def _held(cfg, kind: str) -> list[Record]:
+    out = []
+    for e in writes.held(cfg):
+        rec = e.get("record") or {}
+        if rec.get("kind") == kind:
+            try:
+                out.append(Record.from_dict(rec))
+            except (KeyError, ValueError):
+                continue
+    return out
+
+
 def _origin(rec: Record) -> str:
     o = rec.metadata.get("origin") if isinstance(rec.metadata.get("origin"), str) else ""
     return o if o in ("person", "ruling", "lessons", "research", "revision") else ""
@@ -453,9 +465,11 @@ class _World:
         self.by_jid = {j.source_id: j for j in self.journals}
         self.beliefs = [(r, p) for r in stored(cfg, "belief") if (p := parse_belief(r.content))]
         self.gaps = [(r, p) for r in stored(cfg, "gap") if (p := parse_gap(r.content))]
-        self.answers = [(a, True) for a in stored(cfg, "answer")] + \
-            [(a, False) for a in _pending(cfg, "answer")]
+        self.answers = [(a, True) for a in stored(cfg, "answer")]
         self.answers.sort(key=lambda x: _when(x[0].created_at))
+        # Answers a person has not decided on: the gap waits for them, and is
+        # neither answered by them nor researched again meanwhile.
+        self.awaiting = {a.metadata.get("gap") for a in _pending(cfg, "answer") + _held(cfg, "answer")}
         self.events = _events(cfg)
         self.log = approval.latest(cfg.layout().approvals)
         self.succ: dict[str, list[Record]] = {}
@@ -501,6 +515,12 @@ def _belief_entry(w: _World, rec: Record, p: dict, done: dict[str, dict]) -> dic
     born = w.born(rec)
     meta_ev = [x for x in (rec.metadata.get("evidence") or []) if isinstance(x, str)]
     derived = set(meta_ev) if origin in ("research", "revision") else set()
+    # The sessions it was drawn from, whichever journal of theirs is read,
+    # and the answers it came from: a session shown one of those answers is
+    # not independent of it. Journals shown at session start show only their
+    # core sections, never the lessons, so showing a journal is not counted.
+    derived_sessions = {w.parts[x]["session"] for x in derived if x in w.parts}
+    derived_answers = {x for x in derived if x.startswith("answer:")}
     sig = signature(p)
     ends = [w.born(s) for s in w.succ.get(sid, [])]
     retire_at = min((e["at"] for e in w.events if e["action"] == "retire" and e["id"] == sid),
@@ -519,14 +539,14 @@ def _belief_entry(w: _World, rec: Record, p: dict, done: dict[str, dict]) -> dic
         if end and not after(end, j.created_at):
             break
         pt = w.parts[j.source_id]
-        shown = bid in pt["bids"] or bool(derived & pt["recs"])
+        shown = bid in pt["bids"] or bool(derived_answers & pt["recs"])
         at, sess = j.created_at, pt["session"]
         for sec, _, t in pt["lessons"]:
             if not similar(t, sig, th):
                 continue
             if sec in lr["ruling_sections"] and pt["person"] and not pinned:
                 continue      # a ruling may say the opposite; it never adopts a learned belief
-            if not shown and j.source_id not in derived:
+            if not shown and sess not in derived_sessions:
                 ev.append({"dir": "for", "kind": "restated", "ref": j.source_id, "session": sess, "at": at})
         hit = any(similar(t, sig, th) for t in pt["bad"])
         if pt["checks"].get(sid) == "followed" and not hit:
@@ -590,9 +610,9 @@ def _gap_entry(w: _World, rec: Record, p: dict, beliefs: dict[str, dict]) -> dic
     bel = bel if _TOKEN_STR.match(bel or "x") else ""
     occ = [x for x in (meta.get("evidence") or []) if isinstance(x, str) and _TOKEN_STR.match(x)]
     subject = content_tokens(gap_subject(p["question"]))
-    later: list[tuple[str, str]] = []          # (time, journal id) occurrences after the gap
+    later: list[tuple[str, str]] = []          # (time, journal id), whenever the journal is from
     for j in w.journals:
-        if j.source_id in occ or not after(j.created_at, rec.created_at):
+        if j.source_id in occ:
             continue
         pt = w.parts[j.source_id]
         hit = False
@@ -609,9 +629,12 @@ def _gap_entry(w: _World, rec: Record, p: dict, beliefs: dict[str, dict]) -> dic
     timeline += [(t, "j", jid, None) for t, jid in later]
     timeline.sort(key=lambda x: (_when(x[0]), x[1]))
     g = {"status": "open", "signal": signal, "occurrences": list(occ), "attempts": 0,
-         "confidence": None, "answers": [], "answered_at": None, "belief": bel, "recurred": 0}
+         "confidence": None, "answers": [], "answered_at": None, "belief": bel, "recurred": 0,
+         "awaiting": rec.source_id in w.awaiting}
+    last_attempt = ""
     for t, kind, obj, _ in timeline:
         if kind == "a":
+            last_attempt = t
             conf = obj.metadata.get("confidence")
             conf = float(conf) if _number(conf) and math.isfinite(conf) else 0.0
             g["answers"].append(obj.source_id)
@@ -624,11 +647,11 @@ def _gap_entry(w: _World, rec: Record, p: dict, beliefs: dict[str, dict]) -> dic
                     g["status"] = "parked"
         else:
             g["occurrences"].append(obj)
-            if g["status"] == "answered":
+            if g["status"] == "answered" and after(t, g["answered_at"]):
                 g["status"] = "recurred"
                 g["recurred"] += 1
                 g["attempts"] = 0
-            elif g["status"] == "parked":
+            elif g["status"] == "parked" and after(t, last_attempt):
                 g["status"] = "open"
                 g["attempts"] = 0
     if g["status"] == "answered" and sum(
@@ -707,7 +730,8 @@ def gap_entry(state: dict, rec: Record) -> dict:
     sig = rec.metadata.get("signal") if rec.metadata.get("signal") in WEIGHT else "manual"
     return {"status": "open", "signal": sig, "attempts": 0, "confidence": None, "answers": [],
             "answered_at": None, "belief": rec.metadata.get("belief") or "", "recurred": 0,
-            "occurrences": [x for x in (rec.metadata.get("evidence") or []) if isinstance(x, str)]}
+            "occurrences": [x for x in (rec.metadata.get("evidence") or []) if isinstance(x, str)],
+            "awaiting": False}
 
 
 # ---- side effects --------------------------------------------------------
@@ -746,12 +770,16 @@ def _new_beliefs_from_journals(cfg, w: _World, state: dict, done: set[str]) -> t
     is marked done once all of it is handled."""
     lr = w.lr
     th = lr["similarity"]
-    retired = {sid for sid, e in state["beliefs"].items() if e["status"] == "retired"}
-    cover = [(signature(p), pinned) for p, pinned, sid in _all_beliefs_for_coverage(cfg) if sid not in retired]
+    # Retired beliefs still cover: restating a refuted or retired belief is not
+    # a first observation, and a fresh belief would inherit the old support
+    # without the counter-examples that retired it.
+    cover = [(signature(p), pinned) for p, pinned, _ in _all_beliefs_for_coverage(cfg)]
     created, signals = 0, []
     for j in w.journals:
+        if "signals:" + _token(j.source_id) not in done:
+            signals += _journal_signals(w, j, done)
         key = "journal:" + _token(j.source_id)
-        if key in done:
+        if key in done or created >= lr["max_new"]:
             continue
         pt = w.parts[j.source_id]
         fresh: list[tuple[str, str, frozenset]] = []
@@ -763,18 +791,21 @@ def _new_beliefs_from_journals(cfg, w: _World, state: dict, done: set[str]) -> t
                 continue
             fresh.append(("ruling" if ruling else "lessons", item, t))
         if created + len(fresh) > lr["max_new"] and created:
-            break          # the rest waits for the next run, in order
+            created = lr["max_new"]   # the rest waits for the next run, in order
+            continue
         for origin, item, t in fresh:
             state_, sid = new_belief(cfg, item, "", "", origin=origin, evidence=[j.source_id])
             if state_ in ("stored", "pending"):
                 created += 1
                 cover.append((t, origin == "ruling"))
-        signals += _journal_signals(w, j)
         _mark_done(cfg, key)
     return created, signals
 
 
-def _journal_signals(w: _World, j: Record) -> list[dict]:
+def _journal_signals(w: _World, j: Record, done: set[str]) -> list[dict]:
+    """The journal's signals not yet turned into (or merged into) a gap. Each
+    carries the done key it is marked with once handled, and the journal's
+    `signals:` key once all of them are."""
     lr = w.lr
     th = lr["similarity"]
     pt = w.parts[j.source_id]
@@ -792,7 +823,16 @@ def _journal_signals(w: _World, j: Record) -> list[dict]:
         if verdict == "violated":
             out.append({"signal": "not-holding", "belief": sid, "journal": j.source_id,
                         "item": "", "tokens": frozenset()})
-    return out
+    jt = _token(j.source_id)
+    for s in out:
+        what = s["belief"] or s["item"]
+        s["key"] = f"sig:{s['signal']}:{jt}:{hashlib.sha256(what.encode('utf-8')).hexdigest()[:16]}"
+    pending = [s for s in out if s["key"] not in done]
+    for s in pending:
+        s["journal_key"] = "signals:" + jt
+    if not pending:
+        _mark_done(w.cfg, "signals:" + jt)
+    return pending
 
 
 def _beliefs_from_answers(cfg, w: _World, state: dict, done: set[str]) -> int:
@@ -811,6 +851,10 @@ def _beliefs_from_answers(cfg, w: _World, state: dict, done: set[str]) -> int:
         if not (_number(conf) and conf >= w.cu["confidence_floor"]) or not statement \
                 or statement.lower() == "none" or not applies:
             _mark_done(cfg, key)
+            continue
+        if any(a.source_id in (r.metadata.get("evidence") or [])
+               for r in stored(cfg, "belief") + _pending(cfg, "belief") + _held(cfg, "belief")):
+            _mark_done(cfg, key)   # written before, the done mark was lost
             continue
         rev = _field(part, "Revises").strip().strip(".")
         target = f"belief:{rev}" if _BID.match(rev) else ""
@@ -855,8 +899,7 @@ def _revisions(cfg, w: _World, state: dict, done: set[str]) -> tuple[int, list[d
         if e["pinned"]:
             if key not in done:
                 signals.append({"signal": "contradiction", "belief": sid, "journal": against[-1]["ref"],
-                                "item": "", "tokens": frozenset()})
-                _mark_done(cfg, key)
+                                "item": "", "tokens": frozenset(), "key": key})
             continue
         if e["status"] != "challenged" or _has_successor(cfg, sid) or key in done:
             continue
@@ -884,10 +927,11 @@ def _revisions(cfg, w: _World, state: dict, done: set[str]) -> tuple[int, list[d
                     _log(cfg, f"revision of {sid} refused: a label is missing")
             except model.ModelError as err:
                 _log(cfg, f"revision of {sid} failed: {err}")
-        if not drafted:
+        if drafted:
+            _mark_done(cfg, key)
+        else:
             signals.append({"signal": "contradiction", "belief": sid, "journal": against[-1]["ref"],
-                            "item": "", "tokens": frozenset()})
-        _mark_done(cfg, key)
+                            "item": "", "tokens": frozenset(), "key": key})
     return revised, signals
 
 
@@ -916,6 +960,7 @@ def _write_gaps(cfg, state, signals: list[dict]) -> dict:
     for s in signals:
         if _merge_target(state, gaps, s, th) is not None:
             merged += 1        # the derivation counts it as an occurrence
+            _mark_done(cfg, s["key"])
             continue
         twin = next((f for f in fresh if f["signal"] == s["signal"] and (
             (s["belief"] and f["belief"] == s["belief"]) or
@@ -924,8 +969,10 @@ def _write_gaps(cfg, state, signals: list[dict]) -> dict:
             for j in [*s.get("also", []), s["journal"]]:
                 if j not in twin["journals"]:
                     twin["journals"].append(j)
+            twin["keys"].append(s["key"])
             continue
-        fresh.append({**s, "journals": list(dict.fromkeys([*s.get("also", []), s["journal"]]))})
+        fresh.append({**s, "journals": list(dict.fromkeys([*s.get("also", []), s["journal"]])),
+                      "keys": [s["key"]]})
     fresh.sort(key=lambda f: -WEIGHT[f["signal"]] * (1 + math.log2(len(f["journals"]))))
     taken = {r.source_id.removeprefix("gap:") for r, _ in gaps}
     created = 0
@@ -946,6 +993,14 @@ def _write_gaps(cfg, state, signals: list[dict]) -> dict:
                          source_id=f"gap:{gid}", metadata=meta)
         created += r.state in ("stored", "pending")
         _log(cfg, f"gap {r.state} gap:{gid} {f['signal']}")
+        # Written, held or rejected: handled either way, never asked twice.
+        for k in f["keys"]:
+            _mark_done(cfg, k)
+    # A journal whose every signal is now handled is done with.
+    handled = _done(cfg)
+    for jk in {s["journal_key"] for s in signals if s.get("journal_key")}:
+        if all(s["key"] in handled for s in signals if s.get("journal_key") == jk):
+            _mark_done(cfg, jk)
     return {"gaps_merged": merged, "gaps_created": created,
             "gaps_dropped": max(0, len(fresh) - MAX_NEW_GAPS)}
 
@@ -964,9 +1019,9 @@ def run(cfg, *, reset_state: bool = False) -> dict:
         state = derive(cfg, w)
         created, signals = _new_beliefs_from_journals(cfg, w, state, done)
         from_answers = _beliefs_from_answers(cfg, w, state, done)
-        w = _World(cfg)
-        state = derive(cfg, w)
-        revised, more = _revisions(cfg, w, state, _done(cfg))
+        # New hypotheses cannot be challenged yet: the first derivation is
+        # the right one for revisions.
+        revised, more = _revisions(cfg, w, state, done)
         summary = {"beliefs_created": created + from_answers, "beliefs_revised": revised}
         summary.update(_write_gaps(cfg, state, signals + more))
         state = derive(cfg)

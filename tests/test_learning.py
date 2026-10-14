@@ -299,7 +299,8 @@ def _researcher(user_config, fake_model, reply, extra=""):
 
 def test_a11_parks_after_max_attempts_and_reopens_on_new_evidence(cfg, user_config, fake_model):
     _researcher(user_config, fake_model, "## Answer\nnot sure\n\n## Confidence\n20\n")
-    config_mod.set_grant("gap", True)
+    for p in ("gap", "research"):
+        config_mod.set_grant(p, True)
     c = cfg()
     put(c, "session:1", Pitfalls=PIT)
     put(c, "session:2", Pitfalls=PIT2)
@@ -1063,3 +1064,105 @@ def test_r2_an_answers_belief_is_written_once(cfg, user_config, fake_model):
     for _ in range(3):
         learn.run(c)
     assert len(learn.report(c)) == 1
+
+
+
+# ---- v0.2.0 round 3 findings ----------------------------------------------
+
+def test_r3_f1_restating_a_retired_belief_does_not_resurrect_it(cfg, reviser):
+    reviser(statement="recall only the unfinished part at session start",
+            applies="resuming the same task", not_when="a different task")
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    bid = one(c, L1)["bid"]
+    for i in (4, 5):
+        put(c, f"session:{i}", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
+    learn.run(c)
+    put(c, "session:6", Lessons_learned=f"- {L1d}")
+    learn.run(c)
+    rows = learn.report(c)
+    assert len(rows) == 2 and one(c, L1)["status"] == "retired"
+    assert bid not in recall.assemble(c)
+
+
+def test_r3_f1_a_person_retired_belief_stays_retired(cfg, no_model):
+    c = cfg()
+    for i, text in enumerate([L1, L1b], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    learn.retire(c, one(c, L1)["source_id"])
+    put(c, "session:3", Lessons_learned=f"- {L1c}")
+    learn.run(c)
+    assert len(learn.report(c)) == 1 and one(c, L1)["status"] == "retired"
+
+
+def test_r3_f2_signals_past_the_per_run_cap_are_asked_later(cfg, no_model):
+    c = cfg()
+    words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"]
+    for i, w_ in enumerate(words):
+        put(c, f"session:{i}", Surprises=f"- the {w_} {w_}x {w_}y result came out unexpectedly")
+    learn.run(c)
+    assert len([e for e in writes.pending(c) if e["record"]["kind"] == "gap"]) == 5
+    learn.run(c)
+    assert len([e for e in writes.pending(c) if e["record"]["kind"] == "gap"]) == 7
+    learn.run(c)
+    assert len([e for e in writes.pending(c) if e["record"]["kind"] == "gap"]) == 7
+
+
+def test_r3_f3_a_late_approved_journal_is_an_occurrence(cfg, no_model):
+    config_mod.set_grant("gap", True)
+    c = cfg()
+    writes.write(c, "distill", "journal", jtext(Pitfalls=PIT3), source_id="session:0")
+    put(c, "session:1", Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
+    learn.run(c)
+    e = [x for x in writes.pending(c) if x["record"]["source_id"] == "session:0"][0]
+    writes.approve(c, e["id"], by="t")
+    learn.run(c)
+    assert research.ranked(c)[0]["occurrences"] == 3
+
+
+def test_r3_f4_the_session_that_raised_the_question_never_supports_the_answer(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nx\n\n## Confidence\n90\n\n## Belief\n"
+                + draft(statement="pin compose healthchecks with a start period", applies="compose services"))
+    for p in ("research", "gap"):
+        config_mod.set_grant(p, True)
+    c = cfg()
+    put(c, "session:1", metadata={"session_id": "S"}, Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
+    learn.run(c)
+    research.run(c, 1)
+    put(c, "session:1b", metadata={"session_id": "S"},
+        Lessons_learned="- pin compose healthchecks with a start period for compose services")
+    learn.run(c)
+    assert one(c, "pin compose healthchecks with a start period")["for"] == 0
+
+
+def test_r3_f5_a_lost_done_mark_does_not_write_an_answers_belief_twice(cfg, user_config, fake_model, monkeypatch):
+    _researcher(user_config, fake_model, "## Answer\nx\n\n## Confidence\n90\n\n## Belief\n"
+                + draft(statement="pin compose healthchecks with a start period", applies="compose services"))
+    config_mod.set_grant("research", True)
+    c = cfg()
+    _gap(c, "why do compose services fail on the first start")
+    real = learn._mark_done
+    monkeypatch.setattr(learn, "_mark_done", lambda cfg_, k: None if k.startswith("answer:") else real(cfg_, k))
+    research.run(c, 1)
+    monkeypatch.setattr(learn, "_mark_done", real)
+    learn.run(c)
+    assert len(learn.report(c)) == 1
+
+
+def test_r3_o3_a_gap_with_a_pending_answer_is_not_researched_again(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nx\n\n## Confidence\n90\n")
+    c = cfg()
+    _gap(c, "why do compose services fail on the first start")
+    assert len(research.run(c, 1)["results"]) == 1
+    assert research.run(c, 1)["results"] == []
+    assert research.ranked(c)[0]["status"] == "open"        # not answered until approved
+
+
+def test_r3_o6_the_provider_door_stores_notes_only():
+    with pytest.raises(ValueError):
+        api.store("## Belief checks\n- B-1a2b3c4d: followed", kind="journal")

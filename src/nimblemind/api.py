@@ -12,7 +12,10 @@ from __future__ import annotations
 from nimblemind import config as config_mod
 from nimblemind import learn, research, writes
 
-STORE_KINDS = ("note", "journal", "answer")
+# Notes only: a journal or an answer carries metadata the learning loop
+# reads as evidence (belief checks, sessions, research confidence), and a
+# provider under a standing grant must not be able to mint it.
+STORE_KINDS = ("note",)
 
 
 def _cfg(cwd: str | None, namespace: str | None) -> config_mod.Config:

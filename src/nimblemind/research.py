@@ -163,7 +163,10 @@ def run(cfg, max_gaps: int = 3) -> dict:
     try:
         with file_lock(lock, wait=False):
             state = learn.derive(cfg)
+            # A gap with an answer waiting for the person is not researched
+            # again until they decide on it.
             items = [i for i in ranked(cfg, state) if i["status"] in READY
+                     and not i["_g"].get("awaiting")
                      and i["priority"] >= cfg["curiosity"]["min_priority"]]
             active = learn.applying(cfg, state)
             results = [_one(cfg, i, active) for i in items[:max(max_gaps, 0)]]
