@@ -1456,3 +1456,13 @@ def test_r9_o3_a_held_lesson_covers_nothing(cfg, user_config):
     c = cfg()
     learn.run(c)
     assert [r["statement"] for r in learn.report(c)] == ["always pin the package mirror before running the deploy"]
+
+
+def test_r10_o1_the_same_line_as_lesson_and_ruling_is_two_items(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n[learn]\nmax_new = 1\n')
+    c = cfg()
+    _person_journal(c, "session:1", Lessons_learned="- never deploy on fridays without review sign off",
+                    Rulings="- never deploy on fridays without review sign off")
+    for _ in range(3):
+        learn.run(c)
+    assert sorted((r["origin"], r["pinned"]) for r in learn.report(c)) == [("lessons", False), ("ruling", True)]
