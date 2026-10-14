@@ -194,7 +194,7 @@ checks = ["builtin-secrets"]
 auto = true
 similarity = 0.35
 recur_min = 2
-max_new = 5
+max_new = 25
 
 [curiosity]
 confidence_floor = 70
@@ -388,7 +388,8 @@ counted together against `budget.total_chars`:
 
 1. The source label line, `[nimblemind <namespace>]`, which counts.
 2. Beliefs: those that apply (section 15.8), whole items only, capped at
-   `beliefs_chars`: challenged and revised ones first, then by confidence.
+   `beliefs_chars`: challenged and revised ones first, then the person's,
+   then by confidence.
 3. Core memory: the newest approved journal's `journal.core_sections`
    (default `["Unfinished"]`), capped at `core_chars`. An empty
    `core_sections` list injects the whole journal, as v0.1.0 did.
@@ -592,9 +593,14 @@ what was believed and why it changed is kept.
 
 `pinned` beliefs are the person's own: `origin` `person` (`nimblemind
 belief add`, path `cli`) or `ruling` (an item of a journal's
-`learn.ruling_sections`, which a person approved with its journal). The loop
-adds evidence to a pinned belief and reports it, but never lowers its status,
-revises or retires it.
+`learn.ruling_sections`, in a journal a person stored: its approval entry
+names a person, not a standing grant or an automatic path; a ruling in a
+journal stored under a grant is an ordinary lesson). The loop adds evidence
+to a pinned belief and reports it, but never lowers it below `supported`,
+marks it stale, revises or retires it. Similarity cannot see negation
+("always X" and "never X" share their tokens), so a person's ruling is only
+ever matched to a belief that is already the person's: it never adopts a
+learned belief, and becomes a belief of its own otherwise.
 
 Beliefs are written on path `learn`, whose default level is automatic: a
 belief write passes the isolation check like every write (section 6), is
@@ -615,7 +621,9 @@ were read. It holds ids, enumerated words, numbers and timestamps only, and
 loading refuses any other value: free text is a record, and a record goes
 through section 6. A state that fails to load is a reported error, never
 silently reset; `nimblemind learn --reset-state` rebuilds it by replaying
-every stored journal, belief and answer from the start.
+every stored journal, belief, answer and person event from the start, in
+time order, without writing any record: it reaches the state the runs
+reached.
 
 ### 15.3 Evidence
 
@@ -626,16 +634,26 @@ minus a fixed list of English stop words, minus non-CJK tokens under three
 characters) have a Jaccard index of at least `learn.similarity` (default
 0.35). A belief's signature is its statement and `Applies when`.
 
-A journal is evidence about a belief in these ways, at most one `for` and
-one `against` per journal and belief (the journal is the unit of
-independence: one session, one vote):
+Evidence is ordered in time. Every belief has a birth time: the session it
+came from for a lesson or ruling, otherwise the moment it was written. Only
+journals after that time are evidence about it, so the sessions that raised
+a question never support the answer drawn from them, and a run over new
+journals and a replay of the whole history agree. A revision takes over at
+its own birth (section 15.5).
+
+The unit of independence is the session (the journal's `session_id`): one
+session, one vote, however many journals it was distilled into. A session
+was shown a belief when the distiller listed it (`beliefs_listed`) or a hook
+injected it into that session (`beliefs_shown`, from the per-session record
+of section 10). A journal is evidence about a belief in these ways, at most
+one `for` and one `against` per session and belief:
 
 | kind | direction | when |
 |---|---|---|
 | `restated` | for | an item of `learn.lesson_sections` is similar to the belief, and the belief was not listed to that session's distiller (a session that was shown the belief and repeats it is not independent) |
-| `outcome` | for | the session's `Belief checks` say `followed` and no pitfall or surprise of that session is similar to the belief |
+| `outcome` | for | the session was shown the belief, its `Belief checks` say `followed`, and no pitfall or surprise of that session is similar to the belief |
 | `counter` | against | the belief was listed to the session (it applied) and a pitfall or surprise of that session is similar to it: it was in force and the problem it addresses happened anyway |
-| `research` | for or against | a stored research answer (one a person approved or granted) at or above `confidence_floor` for a gap about the belief: against when the answer revises it, for otherwise; one per gap |
+| `research` | for or against | a stored research answer (one a person approved or granted) at or above `confidence_floor` for a `contradiction` gap about the belief: against when the answer revises it, for otherwise; one per gap. An answer to a `not-holding` gap is about why the belief was skipped, not whether it is right, and is no evidence |
 
 `violated` in `Belief checks` is not evidence about whether the belief is
 right. It means the belief was not applied, which raises the `not-holding`
@@ -667,7 +685,10 @@ A pinned belief is at least `supported` whatever its evidence.
 
 Each status change is appended to the belief's history in the state with
 its time and the evidence that caused it; `nimblemind belief history <id>`
-prints the chain of versions and their transitions.
+prints the chain of versions and their transitions. A person's own actions
+on a belief (`belief retire`, `belief stale`) are also appended to
+`<home>/learn/<ns>/events.jsonl` (ids and times only), so a rebuilt state
+keeps them.
 
 A first observation becomes a hypothesis at once: an item of
 `learn.lesson_sections` that no existing belief covers becomes a new belief
@@ -689,17 +710,19 @@ Not when: <the situations of the counter-examples>
 
 The revision is written on path `learn` as a new belief (`origin:
 revision`, `supersedes` the challenged one); the challenged belief is
-retired by it. A revision carries its predecessor's `for` evidence (what
+retired by it. A belief is drafted at most one revision while one is stored
+or waiting for approval (`approval.learn = "ask"`). A revision carries its predecessor's `for` evidence (what
 held still held, now under narrower conditions) and none of its `against`,
-and it is injected at session start marked as revised, so the next session
-works from the corrected version and its own outcome is the revision's
-first test. With `distiller.command = "none"` no revision is drafted: the
+and until it has evidence of its own it is injected at session start marked
+`revised: verifying`, so the next session works from the corrected version
+and its own outcome is the revision's first test. With `distiller.command = "none"` no revision is drafted: the
 belief stays `challenged` and a `contradiction` gap asks why.
 
 A journal item in `learn.change_sections` (default `Changes`: what changed
 in the environment, a version, a dependency or a requirement) similar to a
-belief marks it `stale`. So does `nimblemind belief stale <id>`. A stale
-belief needs one new `for` before it is trusted again.
+belief that is not pinned marks it `stale`. So does `nimblemind belief stale
+<id>`. A stale belief needs one new `for` before it is trusted again; until
+then only the prompt hook shows it, marked stale.
 
 ### 15.6 Gaps: what to ask next and when to stop
 
@@ -758,9 +781,10 @@ stored answer does any of this, and it also counts as `research` evidence
 
 ### 15.7 Belief checks
 
-When beliefs apply (`supported`, `established`, `challenged`, revised, and
-pinned), the distiller's instructions list them (id and statement, capped
-at `learn.check_chars`, default 1500) and the journal gains:
+The distiller's instructions list the beliefs that apply (`supported`,
+`established`, `challenged`, revised, and pinned) and any other belief a
+hook showed the session, in session start's order, capped at
+`learn.check_chars` (default 1500), and the journal gains:
 
 ```
 ## Belief checks
@@ -769,14 +793,16 @@ at `learn.check_chars`, default 1500) and the journal gains:
 
 The section is required only when beliefs were listed. Lines naming an id
 that was not listed, or another verdict, are dropped. The parsed result
-(`belief_checks`, `{id: verdict}`) and the list of ids shown
-(`beliefs_listed`) go into the journal's metadata, so the approval that
-stores the journal covers both.
+(`belief_checks`, `{id: verdict}`), the ids listed (`beliefs_listed`) and
+the ids the hooks injected (`beliefs_shown`) go into the journal's metadata,
+so the approval that stores the journal covers them, and `learn` counts a
+check only for a belief the session was shown.
 
 ### 15.8 Applying
 
-Session start (section 9) injects applying beliefs, `challenged` and stale
-ones marked, then the newest journal's core sections. The prompt hook
+Session start (section 9) injects applying beliefs, `challenged` and
+revised ones marked, then the newest journal's core sections; stale beliefs
+and hypotheses reach a session only through the prompt hook. The prompt hook
 (section 10) adds beliefs whose signature shares `learn.match_min` content
 tokens with the prompt, hypotheses included and marked as such.
 `nimblemind belief report` lists every belief with status, confidence, `for`
