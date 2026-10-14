@@ -1369,3 +1369,52 @@ def test_r7_o4_one_journal_never_exceeds_max_new(cfg, user_config):
     assert learn.run(c)["beliefs_created"] == 2
     assert learn.run(c)["beliefs_created"] == 1
     assert len(learn.report(c)) == 3
+
+
+# ---- v0.2.0 round 8 findings ----------------------------------------------
+
+def test_r8_f1_a_split_journal_never_reproposes_and_a_refused_item_does_not_stall(cfg, user_config, tmp_path):
+    user_config('[distiller]\ncommand = "none"\n[learn]\nmax_new = 1\n')
+    c = cfg()
+    put(c, "session:1", Lessons_learned="- always pin the zebracorp mirror before running the deploy\n"
+                                        "- keep the release notes in the changelog directory\n"
+                                        "- run the linter before pushing any branch")
+    user_config('[distiller]\ncommand = "none"\n[learn]\nmax_new = 1\n'
+                '[isolation]\nchecks = ["builtin-secrets", "builtin-patterns"]\ndeny = ["zebracorp"]\n')
+    c = cfg()
+    for _ in range(4):
+        learn.run(c)
+    assert len(learn.report(c)) == 2 and len(writes.held(c)) == 1
+
+
+def test_r8_f1_a_rejected_lesson_is_not_asked_again(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n[approval]\nlearn = "ask"\n[learn]\nmax_new = 1\n')
+    c = cfg()
+    put(c, "session:1", Lessons_learned="- alpha bravo charlie matters a lot\n- delta echo foxtrot matters a lot")
+    learn.run(c)
+    first = [e for e in writes.pending(c) if e["record"]["kind"] == "belief"]
+    assert len(first) == 1 and "alpha" in first[0]["record"]["content"]
+    writes.reject(c, first[0]["id"])
+    learn.run(c)
+    learn.run(c)
+    texts = [e["record"]["content"] for e in writes.pending(c) if e["record"]["kind"] == "belief"]
+    assert len(texts) == 1 and "delta" in texts[0]
+
+
+@pytest.mark.parametrize("max_new", [1, 25])
+def test_r8_f2_split_or_not_a_journal_derives_the_same_beliefs(cfg, user_config, max_new):
+    user_config(f'[distiller]\ncommand = "none"\n[learn]\nmax_new = {max_new}\n'
+                'lesson_sections = ["Rulings", "Lessons learned"]\n')
+    c = cfg()
+    _person_journal(c, "session:1", Rulings="- never retry flaky network calls in the deploy script",
+                    Lessons_learned="- never retry the flaky network calls in the deploy script")
+    for _ in range(4):
+        learn.run(c)
+    assert [r["origin"] for r in learn.report(c)] == ["ruling"]
+
+
+def test_r8_o1_a_standing_persons_belief_covers_their_ruling(cfg, no_model):
+    c = cfg()
+    _person_belief(c)
+    _person_journal(c, "session:1", Rulings=f"- {L1b}")
+    assert learn.run(c)["beliefs_created"] == 0

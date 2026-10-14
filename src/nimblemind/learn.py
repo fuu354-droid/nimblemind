@@ -794,8 +794,8 @@ def _has_successor(cfg, sid: str) -> bool:
 
 def _new_beliefs_from_journals(cfg, w: _World, state: dict, done: set[str]) -> tuple[int, list[dict]]:
     """Uncovered lessons become hypotheses; journal signals are collected.
-    Journals oldest first, at most `learn.max_new` beliefs per run; a journal
-    is marked done once all of it is handled."""
+    Journals oldest first, at most `learn.max_new` beliefs per run; each
+    lesson item is handled once, and a journal is done once all of it is."""
     lr = w.lr
     th = lr["similarity"]
     # Retired beliefs still cover: restating a refuted or retired belief is not
@@ -809,26 +809,33 @@ def _new_beliefs_from_journals(cfg, w: _World, state: dict, done: set[str]) -> t
     for j in w.journals:
         if "signals:" + _token(j.source_id) not in done:
             signals += _journal_signals(w, j, done)
-        key = "journal:" + _token(j.source_id)
-        if key in done or created >= lr["max_new"]:
+        jt = _token(j.source_id)
+        key = "journal:" + jt
+        if key in done:
             continue
         pt = w.parts[j.source_id]
-        fresh: list[tuple[str, str, frozenset]] = []
-        for sec, item, t in pt["lessons"]:
+        finished = True
+        # Item by item, in section order, each handled exactly once whatever
+        # became of its write (stored, pending, held, rejected later), with the
+        # cover updated after each: so a journal split across runs by
+        # `max_new` proposes exactly what one run would have.
+        for idx, (sec, item, t) in enumerate(pt["lessons"]):
+            ikey = f"lesson:{jt}:{idx}"
+            if ikey in done:
+                continue
             ruling = sec in lr["ruling_sections"] and pt["person"]
-            if any(similar(t, sig, th) and (pinned or not ruling) for sig, pinned in cover):
-                continue
-            if any(similar(t, f[2], th) and (f[0] == "ruling") == ruling for f in fresh):
-                continue
-            fresh.append(("ruling" if ruling else "lessons", item, t))
-        room = lr["max_new"] - created
-        for origin, item, t in fresh[:room]:
-            state_, sid = new_belief(cfg, item, "", "", origin=origin, evidence=[j.source_id])
-            if state_ in ("stored", "pending"):
-                created += 1
-                cover.append((t, origin == "ruling"))
-        if len(fresh) <= room:
-            _mark_done(cfg, key)       # else the rest of it waits for the next run
+            if not any(similar(t, sig, th) and (pinned or not ruling) for sig, pinned in cover):
+                if created >= lr["max_new"]:
+                    finished = False
+                    break          # the rest waits for the next run, in order
+                origin = "ruling" if ruling else "lessons"
+                state_, _ = new_belief(cfg, item, "", "", origin=origin, evidence=[j.source_id])
+                if state_ in ("stored", "pending"):
+                    created += 1
+                    cover.append((t, ruling))
+            _mark_done(cfg, ikey)
+        if finished:
+            _mark_done(cfg, key)
     return created, signals
 
 

@@ -87,8 +87,6 @@ def _mark(e: dict) -> str:
         return "stale: something it depends on changed"
     if learn.is_verifying(e):
         return "revised: verifying"
-    if st == "stale":
-        return "stale: something it depends on changed"
     if e.get("pinned"):
         return "yours"
     return f"{st} {e['confidence']:.2f}"
