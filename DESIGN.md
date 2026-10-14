@@ -455,7 +455,9 @@ use; an `argv` researcher ignores it.
 
 Outward API (the provider direction): `nimblemind.api` exposes `store`,
 `recall`, `delete`, `gaps_add`, `gaps_list` and `beliefs_list`, every
-write routed through section 6 on path `provider`. The CLI mirrors it with
+write routed through section 6 on path `provider`. A provider stores notes
+only: journals and answers carry metadata the learning loop reads as
+evidence, which another tool must not be able to mint. The CLI mirrors it with
 `--json`. A Hermes-style memory provider built on this API is the first
 external integration test, under `integrations/hermes/`; it is a test, not a
 dependency.
@@ -615,11 +617,14 @@ revoke learn` is not needed and does nothing.
 
 What is believed is derived, never accumulated. Every belief's evidence,
 confidence, status and history, and every gap's lifecycle, are a function
-of the stored records (journals, beliefs, gaps, answers, pending answers)
-and the person's event log, recomputed by every `learn` run. So the order
-in which records became visible (a journal approved a week after it was
-queued, a run cut short by `max_new`, a research answer approved later)
-cannot change the result. The derived state is cached in
+of the stored records (journals, beliefs, gaps, answers) and the person's
+event log, recomputed by every `learn` run. So for a given set of records,
+the order in which they became visible (a journal approved a week after it
+was queued, a run cut short by `max_new`, a research answer approved later)
+cannot change what is derived. What the loop writes in response (a revision,
+a question) does depend on what it had seen when it wrote it, as any
+decision depends on when it was made; those records then become part of
+what is derived from. The derived state is cached in
 `<home>/learn/<ns>/state.json`; a cache that fails to load is reported by
 the commands that read it (hooks stay silent) and rebuilt, losing nothing,
 by the next run. `nimblemind learn --reset-state` is the derivation alone:
@@ -627,8 +632,9 @@ it writes no record.
 
 What a run does (write a new belief, a gap, a revision) is a side effect,
 recorded once in `<home>/learn/<ns>/done.jsonl`, so it happens once however
-often the history is derived: a rejected gap is not asked again, and a
-journal's lessons are proposed once. A person's own actions on a belief
+often the history is derived: a rejected gap is not asked again, a
+journal's lessons are proposed once, and each signal is marked when its gap
+is written or merged (one past a run's cap waits for the next run). A person's own actions on a belief
 (`belief retire`, `belief stale`) are appended to
 `<home>/learn/<ns>/events.jsonl` and are part of what is derived from.
 
@@ -708,7 +714,9 @@ keeps them.
 A first observation becomes a hypothesis at once: an item of
 `learn.lesson_sections` that no stored or pending belief covers becomes a
 new belief (`origin: lessons`, or `ruling` from a ruling section of a
-person's journal), and that journal is its first `restated` evidence. New
+person's journal), and that journal is its first `restated` evidence. A
+retired belief still covers: restating a refuted belief is not a first
+observation and never brings it back as a new one. New
 journals are handled oldest first, and a run stops once it has created
 `learn.max_new` (default 25) beliefs; the rest wait for the next run, which
 only spreads the writes: the derivation is the same either way.
@@ -762,8 +770,9 @@ Signals, each built from a fixed template, never by a model:
 | `manual` | `nimblemind gap add` | the given impact, default 2 |
 
 A signal similar to an open gap (or, for the belief signals, about the same
-belief) merges into it instead of adding one. At most five new gaps per
-run, highest weight first.
+belief) merges into it instead of adding one: every matching journal is an
+occurrence, whenever it is from. At most five new gaps per run, highest
+weight first; the rest are written by later runs.
 
 `research` ranks `open` and `recurred` gaps:
 
@@ -778,9 +787,11 @@ priority    = impact * (0.5 + uncertainty) / cost
 contradiction 1, not-holding 1, recurring 1, surprise 2, manual 2). Impact
 outweighs uncertainty: a very uncertain question nobody is blocked on ranks
 under a moderately certain one that keeps costing sessions. Research stops
-on an answer at or above `confidence_floor` (`answered`); under it the
-attempt counts, and at `max_attempts` the gap is `parked` until its signal
-recurs. An answered gap is `verified` once `verify_window` later journals
+on a stored answer at or above `confidence_floor` (`answered`); under it
+the attempt counts, and at `max_attempts` the gap is `parked` until its
+signal recurs. An answer waiting for the person (pending or held) neither
+answers the gap nor counts as an attempt, and the gap is not researched
+again until the person decides on it. An answered gap is `verified` once `verify_window` later journals
 pass without its signal, and `recurred` (open again) if the signal returns:
 verified means the problem stopped, not that an answer exists.
 
