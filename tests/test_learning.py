@@ -1418,3 +1418,41 @@ def test_r8_o1_a_standing_persons_belief_covers_their_ruling(cfg, no_model):
     _person_belief(c)
     _person_journal(c, "session:1", Rulings=f"- {L1b}")
     assert learn.run(c)["beliefs_created"] == 0
+
+
+# ---- v0.2.0 round 9 findings ----------------------------------------------
+
+def test_r9_f1_reordering_sections_mid_split_drops_nothing(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n[learn]\nmax_new = 1\n')
+    c = cfg()
+    _person_journal(c, "session:1", Lessons_learned="- alpha bravo charlie matters a lot\n- delta echo foxtrot matters a lot",
+                    Rulings="- never deploy on fridays without review sign off")
+    learn.run(c)
+    user_config('[distiller]\ncommand = "none"\n[learn]\nmax_new = 1\n'
+                'lesson_sections = ["Rulings", "Lessons learned"]\n')
+    c = cfg()
+    for _ in range(4):
+        learn.run(c)
+    assert sorted(r["origin"] for r in learn.report(c)) == ["lessons", "lessons", "ruling"]
+
+
+def test_r9_o2_a_repeated_refused_line_is_held_once(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n')
+    c = cfg()
+    put(c, "session:1", Lessons_learned="- always pin the zebracorp mirror\n- always pin the zebracorp mirror")
+    user_config('[distiller]\ncommand = "none"\n[isolation]\nchecks = ["builtin-secrets", "builtin-patterns"]\n'
+                'deny = ["zebracorp"]\n')
+    learn.run(cfg())
+    assert len(writes.held(cfg())) == 1
+
+
+def test_r9_o3_a_held_lesson_covers_nothing(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n')
+    c = cfg()
+    put(c, "session:1", Lessons_learned="- always pin the zebracorp mirror before running the deploy")
+    put(c, "session:2", Lessons_learned="- always pin the package mirror before running the deploy")
+    user_config('[distiller]\ncommand = "none"\n[isolation]\nchecks = ["builtin-secrets", "builtin-patterns"]\n'
+                'deny = ["zebracorp"]\n')
+    c = cfg()
+    learn.run(c)
+    assert [r["statement"] for r in learn.report(c)] == ["always pin the package mirror before running the deploy"]

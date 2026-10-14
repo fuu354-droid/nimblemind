@@ -819,8 +819,11 @@ def _new_beliefs_from_journals(cfg, w: _World, state: dict, done: set[str]) -> t
         # became of its write (stored, pending, held, rejected later), with the
         # cover updated after each: so a journal split across runs by
         # `max_new` proposes exactly what one run would have.
-        for idx, (sec, item, t) in enumerate(pt["lessons"]):
-            ikey = f"lesson:{jt}:{idx}"
+        for sec, item, t in pt["lessons"]:
+            # Keyed by content, not position: a change to `lesson_sections`
+            # or a repeated line cannot make an unhandled item look handled.
+            digest = hashlib.sha256(f"{sec}\0{item}".encode("utf-8")).hexdigest()[:16]
+            ikey = f"lesson:{jt}:{digest}"
             if ikey in done:
                 continue
             ruling = sec in lr["ruling_sections"] and pt["person"]
@@ -834,6 +837,7 @@ def _new_beliefs_from_journals(cfg, w: _World, state: dict, done: set[str]) -> t
                     created += 1
                     cover.append((t, ruling))
             _mark_done(cfg, ikey)
+            done.add(ikey)
         if finished:
             _mark_done(cfg, key)
     return created, signals
