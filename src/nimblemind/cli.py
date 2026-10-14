@@ -591,7 +591,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.fn(args)
-    except config_mod.ConfigError as e:
+    except (config_mod.ConfigError, config_mod.paths.LocationError) as e:
         if args.cmd == "hook":
             return 0
         say(f"config error: {e}", file=sys.stderr)

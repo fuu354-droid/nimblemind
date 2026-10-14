@@ -22,16 +22,32 @@ PROJECT_CONFIG = ".nimblemind.toml"
 MAX_COMPONENT = 48
 
 
-def _env_path(name: str) -> Path | None:
+class LocationError(ValueError):
+    """A location this package was told to use is not an absolute path."""
+
+
+def _env_path(name: str, required_absolute: bool = False) -> Path | None:
+    """A location from the environment. A relative value would resolve
+    against whatever directory the process runs in, which for a hook is the
+    session's project: a platform base (`XDG_*`, `APPDATA`, `LOCALAPPDATA`)
+    is then ignored, as the XDG spec says, and one of this package's own
+    variables is an error."""
     raw = os.environ.get(name, "").strip()
-    return Path(raw).expanduser() if raw else None
+    if not raw:
+        return None
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p
+    if required_absolute:
+        raise LocationError(f"{name} must be an absolute path, got {raw!r}")
+    return None
 
 
 def data_home() -> Path:
     """The data home: records, pending and held writes, logs, locks.
     Environment variable, then `home` in the user config, then the platform
     default (DESIGN.md section 3)."""
-    explicit = _env_path("NIMBLEMIND_HOME")
+    explicit = _env_path("NIMBLEMIND_HOME", required_absolute=True)
     if explicit:
         return explicit
     configured = _configured_home()
@@ -45,7 +61,12 @@ def _configured_home() -> Path | None:
         raw = tomllib.loads(user_config().read_bytes().decode("utf-8-sig")).get("home")
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError, ValueError, RecursionError):
         return None
-    return Path(raw).expanduser() if isinstance(raw, str) and raw.strip() else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    p = Path(raw.strip()).expanduser()
+    if not p.is_absolute():
+        raise LocationError(f"{user_config()}: home must be an absolute path, got {raw!r}")
+    return p
 
 
 def default_data_home() -> Path:
@@ -60,7 +81,7 @@ def default_data_home() -> Path:
 
 def user_config() -> Path:
     """The user config file. It may not exist; defaults then apply."""
-    explicit = _env_path("NIMBLEMIND_CONFIG")
+    explicit = _env_path("NIMBLEMIND_CONFIG", required_absolute=True)
     if explicit:
         return explicit
     if sys.platform == "win32":
