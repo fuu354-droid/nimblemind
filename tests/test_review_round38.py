@@ -47,3 +47,30 @@ def test_f38_1_hooks_stay_silent_on_a_relative_home(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "stdout", out)
     assert cli.main(["hook", "session-start"]) == 0
     assert out.getvalue() == "" and not (tmp_path / "nm-data").exists()
+
+
+def test_f39_1_relative_home_directory_is_refused(monkeypatch):
+    monkeypatch.delenv("NIMBLEMIND_HOME")
+    monkeypatch.delenv("NIMBLEMIND_CONFIG")
+    monkeypatch.setenv("HOME", "relhome")
+    monkeypatch.setenv("USERPROFILE", "relhome")
+    with pytest.raises(paths.LocationError):
+        paths.data_home()
+    with pytest.raises(paths.LocationError):
+        paths.user_config()
+    assert cli.main(["config"]) == 2
+
+
+def test_f39_1_memila_env_file_relative_is_ignored(monkeypatch, tmp_path):
+    from nimblemind.backends import memila
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "x.env").write_text("MEMILA_API_KEY=planted\n", encoding="utf-8")
+    monkeypatch.setattr(memila, "ENV_FILE", paths.Path("x.env"))
+    assert memila._env_file() == {}
+
+
+def test_f39_2_relative_config_is_an_error_for_the_data_home_too(monkeypatch):
+    monkeypatch.delenv("NIMBLEMIND_HOME")
+    monkeypatch.setenv("NIMBLEMIND_CONFIG", "rel.toml")
+    with pytest.raises(paths.LocationError):
+        paths.data_home()

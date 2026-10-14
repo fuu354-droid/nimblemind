@@ -33,6 +33,10 @@ ENV_FILE = Path.home() / ".config" / "memila.env"
 
 
 def _env_file() -> dict[str, str]:
+    # Fixed at import from the home directory; a relative one would read a
+    # file from whatever directory the process runs in.
+    if not ENV_FILE.is_absolute():
+        return {}
     try:
         lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
     except OSError:

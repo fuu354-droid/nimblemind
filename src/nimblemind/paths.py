@@ -43,6 +43,16 @@ def _env_path(name: str, required_absolute: bool = False) -> Path | None:
     return None
 
 
+def home() -> Path:
+    """The user's home directory, the base of every platform default. A
+    relative HOME (or USERPROFILE) would make every default location
+    relative to the process's directory, so it is an error."""
+    h = Path.home()
+    if not h.is_absolute():
+        raise LocationError(f"the home directory must be an absolute path, got {str(h)!r}")
+    return h
+
+
 def data_home() -> Path:
     """The data home: records, pending and held writes, logs, locks.
     Environment variable, then `home` in the user config, then the platform
@@ -57,25 +67,27 @@ def data_home() -> Path:
 
 
 def _configured_home() -> Path | None:
+    # Outside the try: a refused location is an error, never a missing file.
+    config_file = user_config()
     try:
-        raw = tomllib.loads(user_config().read_bytes().decode("utf-8-sig")).get("home")
+        raw = tomllib.loads(config_file.read_bytes().decode("utf-8-sig")).get("home")
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError, ValueError, RecursionError):
         return None
     if not isinstance(raw, str) or not raw.strip():
         return None
     p = Path(raw.strip()).expanduser()
     if not p.is_absolute():
-        raise LocationError(f"{user_config()}: home must be an absolute path, got {raw!r}")
+        raise LocationError(f"{config_file}: home must be an absolute path, got {raw!r}")
     return p
 
 
 def default_data_home() -> Path:
     if sys.platform == "win32":
-        base = _env_path("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
+        base = _env_path("LOCALAPPDATA") or home() / "AppData" / "Local"
         return base / APP
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / APP
-    base = _env_path("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+        return home() / "Library" / "Application Support" / APP
+    base = _env_path("XDG_DATA_HOME") or home() / ".local" / "share"
     return base / APP
 
 
@@ -85,11 +97,11 @@ def user_config() -> Path:
     if explicit:
         return explicit
     if sys.platform == "win32":
-        base = _env_path("APPDATA") or Path.home() / "AppData" / "Roaming"
+        base = _env_path("APPDATA") or home() / "AppData" / "Roaming"
         return base / APP / "config.toml"
     if sys.platform == "darwin":
         return default_data_home() / "config.toml"
-    base = _env_path("XDG_CONFIG_HOME") or Path.home() / ".config"
+    base = _env_path("XDG_CONFIG_HOME") or home() / ".config"
     return base / APP / "config.toml"
 
 

@@ -83,8 +83,8 @@ Every location is an absolute path. A relative value would resolve against
 whatever directory the process runs in, which for a hook is the session's
 project: a relative platform base (`XDG_DATA_HOME`, `XDG_CONFIG_HOME`,
 `APPDATA`, `LOCALAPPDATA`) is ignored, as the XDG Base Directory spec says,
-and a relative `NIMBLEMIND_HOME`, `NIMBLEMIND_CONFIG` or `home` is a config
-error (hooks stay silent).
+and a relative `NIMBLEMIND_HOME`, `NIMBLEMIND_CONFIG`, `home` or home
+directory (`HOME`, `USERPROFILE`) is a config error (hooks stay silent).
 
 Data home layout:
 
