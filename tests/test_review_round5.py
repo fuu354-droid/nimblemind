@@ -44,12 +44,34 @@ def test_f5_2_configured_generic_harness_loads_the_project(cfg, user_config, tmp
     monkeypatch.setattr(sys, "stdout", out)
     assert cli.main(["hook", "session-start"]) == 0
     assert out.getvalue() == ""
+    # Empty because the project's zero budget applied, not because the hook
+    # crashed reading "hello" as JSON: a crash leaves a hook.log entry.
+    from nimblemind.paths import data_home
+    log = data_home() / "logs" / "hook.log"
+    assert not log.exists() or "session-start" not in log.read_text(encoding="utf-8")
 
 
-def test_f5_3_sessions_sharing_a_prefix_in_one_second_do_not_collide():
+def test_f5_3_sessions_sharing_a_prefix_in_one_second_do_not_collide(monkeypatch):
     a = {distill.source_id_for("project-session-one") for _ in range(50)}
     b = {distill.source_id_for("project-session-two") for _ in range(50)}
     assert len(a) == 50 and len(b) == 50 and not (a & b)
+
+
+def test_f5_3_same_microsecond_same_suffix_still_apart(monkeypatch):
+    # The case the full-id hash exists for: one clock reading and one random
+    # suffix, two sessions whose ids share their first eight characters.
+    import datetime as dt
+
+    frozen = dt.datetime(2026, 10, 14, 1, 2, 3, 456789, tzinfo=dt.timezone.utc)
+
+    class Clock(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(distill, "datetime", Clock)
+    monkeypatch.setattr(distill.secrets, "token_hex", lambda n: "abcd")
+    assert distill.source_id_for("project-session-one") != distill.source_id_for("project-session-two")
 
 
 def test_f5_4_undecodable_check_output_still_holds(cfg, user_config, tmp_path):
