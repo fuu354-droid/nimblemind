@@ -464,6 +464,7 @@ class _World:
         self.journals = stored(cfg, "journal")
         self.by_jid = {j.source_id: j for j in self.journals}
         self.beliefs = [(r, p) for r in stored(cfg, "belief") if (p := parse_belief(r.content))]
+        self.parsed = {r.source_id: p for r, p in self.beliefs}
         self.gaps = [(r, p) for r in stored(cfg, "gap") if (p := parse_gap(r.content))]
         self.answers = [(a, True) for a in stored(cfg, "answer")]
         self.answers.sort(key=lambda x: _when(x[0].created_at))
@@ -635,8 +636,11 @@ def _gap_occurrences(w: _World, rec: Record, beliefs: dict[str, dict]) -> tuple[
             hit = any(similar(t, subject, th) for _, t in pool)
         elif signal == "not-holding":
             hit = pt["checks"].get(bel) == "violated"
-        elif signal == "contradiction" and bel in beliefs:
-            hit = any(e["ref"] == j.source_id and e["dir"] == "against" for e in beliefs[bel]["evidence"])
+        elif signal == "contradiction" and bel in w.parsed:
+            # Every counter-example journal, as for the other kinds: not the
+            # belief's evidence, which keeps one per session.
+            sig = signature(w.parsed[bel])
+            hit = w.parsed[bel]["bid"] in pt["bids"] and any(similar(t, sig, th) for t in pt["bad"])
         if hit:
             later.append((j.created_at, j.source_id))
     return occ, later
@@ -924,7 +928,7 @@ def _revisions(cfg, w: _World, state: dict, done: set[str]) -> tuple[int, list[d
         if e["pinned"]:
             if key not in done:
                 signals.append({"signal": "contradiction", "belief": sid, "journal": against[-1]["ref"],
-                                "item": "", "tokens": frozenset(), "key": key})
+                                "item": "", "tokens": frozenset(), "key": key, "at": against[-1]["at"]})
             continue
         if e["status"] != "challenged" or _has_successor(cfg, sid) or key in done:
             continue
@@ -956,7 +960,7 @@ def _revisions(cfg, w: _World, state: dict, done: set[str]) -> tuple[int, list[d
             _mark_done(cfg, key)
         else:
             signals.append({"signal": "contradiction", "belief": sid, "journal": against[-1]["ref"],
-                            "item": "", "tokens": frozenset(), "key": key})
+                            "item": "", "tokens": frozenset(), "key": key, "at": against[-1]["at"]})
     return revised, signals
 
 
