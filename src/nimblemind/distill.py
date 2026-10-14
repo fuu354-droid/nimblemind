@@ -127,6 +127,13 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
     meta = {"session_id": session_id}
     if shown:
         meta["beliefs_shown"] = shown
+    # Every record the hooks injected: a belief drawn from one of them (a
+    # research answer) is not independently restated by this session.
+    from nimblemind import recall
+    seen = sorted(x for x in recall.injected(session_id) if x and len(x) <= 200 and not any(
+        c.isspace() for c in x))
+    if seen:
+        meta["records_shown"] = seen
     if listed:
         meta["beliefs_listed"] = [bid for bid, _ in listed]
         checks = learn.belief_checks(text, {bid for bid, _ in listed})

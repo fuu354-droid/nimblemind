@@ -274,7 +274,7 @@ def test_a11_pending_and_held_journals_produce_nothing(cfg, no_model):
     for i in (1, 2):
         writes.write(c, "distill", "journal", jtext(Pitfalls=PIT, Lessons_learned=f"- {L1}"),
                      source_id=f"session:{i}")
-    assert learn.run(c)["journals_read"] == 0
+    learn.run(c)
     assert learn.report(c) == [] and len(writes.pending(c)) == 2
 
 
@@ -348,7 +348,7 @@ def test_research_corrects_the_belief_its_gap_is_about(cfg, user_config, fake_mo
     _gap(c, "is full recall of the newest journal right", signal="contradiction",
          evidence=["session:3"], belief=old["source_id"])
     out = research.run(c, 1)["results"][0]
-    assert out["status"] == "answered" and out["belief"].startswith("belief:B-")
+    assert out["status"] == "answered"
     rows = report(c)
     assert rows[L1]["status"] == "retired" and rows[L1]["against"] == 1
     assert rows["recall by the task at hand, not by recency"]["supersedes"] == old["source_id"]
@@ -360,7 +360,7 @@ def test_research_answers_are_untrusted_and_pending_by_default(cfg, user_config,
     c = cfg()
     _gap(c, "why is the sky blue at noon")
     out = research.run(c, 1)["results"][0]
-    assert out["answer"].startswith("pending") and out["belief"] == ""   # not stored: no belief
+    assert out["answer"].startswith("pending") and learn.report(c) == []   # not stored: no belief
     ans = [e for e in writes.pending(c) if e["record"]["kind"] == "answer"][0]
     assert ans["record"]["content"].startswith("Untrusted evidence")
 
@@ -555,9 +555,11 @@ def test_state_refuses_free_text_and_reports_corruption(cfg, no_model):
     f = learn._state_file(c)
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("[]", encoding="utf-8")
+    # The state is a cache of what the records say: readers report it, and
+    # the next run rebuilds it, losing nothing.
     with pytest.raises(learn.StateError):
-        learn.run(c)
-    learn.run(c, reset_state=True)
+        learn.load_state(c)
+    learn.run(c)
     assert learn.load_state(c)["version"] == learn.STATE_VERSION
 
 
@@ -611,7 +613,7 @@ def test_cli_round_trip(cfg, no_model, capsys):
                      "--applies-when", "a review round finds a defect"]) == 0
     capsys.readouterr()
     assert cli.main(["learn", "--json"]) == 0
-    assert "journals_read" in json.loads(capsys.readouterr().out)
+    assert "beliefs_created" in json.loads(capsys.readouterr().out)
     with pytest.raises(SystemExit):
         cli.main(["gap", "add", "x", "--impact", "9"])
 
@@ -724,29 +726,18 @@ def test_r1_o7_a_ruling_in_a_granted_journal_is_not_the_persons(cfg, no_model):
     assert b["origin"] == "lessons" and not b["pinned"]
 
 
-def test_r1_f4_research_rechecks_pinned_under_the_lock(cfg, user_config, fake_model, monkeypatch):
+def test_r1_f4_an_answer_never_revises_a_persons_belief(cfg, user_config, fake_model):
     c = cfg()
-    for i, text in enumerate([L1, L1b], 1):
-        put(c, f"session:{i}", Lessons_learned=f"- {text}")
-    learn.run(c)
-    b = one(c, L1)
+    bid = _person_belief(c)
     reply = ("## Answer\nx\n\n## Confidence\n90\n\n## Belief\n"
-             + draft(statement="a replacement", applies="always", not_when="none", revises=b["bid"]))
+             + draft(statement="a replacement", applies="always", not_when="none", revises=bid))
     _researcher(user_config, fake_model, reply)
     config_mod.set_grant("research", True)
     c = cfg()
-    _gap(c, "does it hold", signal="contradiction", evidence=["session:2"], belief=b["source_id"])
-    real = research.model.run
-
-    def run_and_pin(*a, **k):
-        out = real(*a, **k)
-        with learn.locked_state(c) as st:              # a ruling pinned it meanwhile
-            st["beliefs"][b["source_id"]]["pinned"] = True
-        return out
-    monkeypatch.setattr(research.model, "run", run_and_pin)
+    _gap(c, "does it hold", signal="contradiction", evidence=["session:2"], belief=f"belief:{bid}")
     research.run(c, 1)
     rows = report(c)
-    assert rows[L1]["status"] != "retired" and "a replacement" in rows
+    assert rows[L1]["status"] == "supported" and rows[L1]["pinned"]
     assert rows["a replacement"]["origin"] == "research" and rows["a replacement"]["supersedes"] == ""
 
 
@@ -856,3 +847,207 @@ def test_r1_o5_state_rejects_non_numeric_confidence(cfg):
     s["beliefs"]["belief:B-1"] = {"status": "supported", "confidence": "high", "evidence": [], "history": []}
     with pytest.raises(learn.StateError):
         learn.validate_state(s)
+
+
+# ---- v0.2.0 round 2 findings ----------------------------------------------
+
+def test_r2_f1_a_late_approved_journal_supports_instead_of_duplicating(cfg, no_model):
+    c = cfg()
+    writes.write(c, "distill", "journal", jtext(Lessons_learned=f"- {L1}"), source_id="session:1")
+    put(c, "session:2", Lessons_learned=f"- {L1b}")
+    learn.run(c)
+    pend = [e for e in writes.pending(c) if e["record"]["source_id"] == "session:1"]
+    writes.approve(c, pend[0]["id"], by="t")
+    learn.run(c)
+    rows = learn.report(c)
+    assert len(rows) == 1 and rows[0]["for"] == 2 and rows[0]["status"] == "supported"
+    before = learn.load_state(c)
+    learn.run(c, reset_state=True)
+    assert learn.load_state(c) == before
+
+
+def test_r2_f2_a_max_new_cut_does_not_change_what_a_revision_inherits(cfg, user_config, fake_model):
+    reply = draft(statement="narrower", applies="same task", not_when="other task")
+    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(reply))}\n[learn]\nmax_new = 1\n')
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    bid = one(c, L1)["bid"]
+    put(c, "session:4", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
+    put(c, "session:5", Lessons_learned="- alpha bravo charlie matters")
+    put(c, "session:6", Lessons_learned="- delta echo foxtrot matters")
+    for _ in range(4):
+        learn.run(c)
+    before = learn.load_state(c)
+    learn.run(c, reset_state=True)
+    assert learn.load_state(c) == before and one(c, "narrower")["for"] == 3
+
+
+def test_r2_f3_ask_mode_lesson_keeps_its_first_evidence_and_is_proposed_once(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n[approval]\nlearn = "ask"\n')
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    put(c, "session:2", Lessons_learned=f"- {L1b}")
+    learn.run(c)
+    pend = [e for e in writes.pending(c) if e["record"]["kind"] == "belief"]
+    assert len(pend) == 1
+    writes.approve(c, pend[0]["id"], by="t")
+    learn.run(c)
+    assert one(c, L1)["for"] == 2 and one(c, L1)["status"] == "supported"
+
+
+def test_r2_f4_a_persons_stale_survives_reset_after_an_older_change(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    put(c, "session:2", Changes="- session start now recalls the newest journal in full differently")
+    put(c, "session:3", Lessons_learned=f"- {L1b}")
+    learn.run(c)
+    assert one(c, L1)["status"] == "supported"
+    learn.mark_stale(c, one(c, L1)["source_id"])
+    assert one(c, L1)["status"] == "stale"
+    learn.run(c, reset_state=True)
+    assert one(c, L1)["status"] == "stale"
+
+
+def test_r2_f5_an_answer_approved_later_counts_and_brings_its_belief(cfg, user_config, fake_model):
+    c = cfg()
+    bid = _person_belief(c)
+    for i, text in enumerate([L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    before = one(c, L1)["for"]
+    reply = ("## Answer\nholds\n\n## Confidence\n90\n\n## Belief\n"
+             + draft(statement="pin the start period on compose services", applies="compose services"))
+    _researcher(user_config, fake_model, reply)
+    c = cfg()
+    _gap(c, "does it hold", signal="contradiction", evidence=["session:1"], belief=f"belief:{bid}")
+    research.run(c, 1)                                   # answer pending: research is ask
+    assert one(c, L1)["for"] == before
+    ans = [e for e in writes.pending(c) if e["record"]["kind"] == "answer"][0]
+    writes.approve(c, ans["id"], by="t")
+    learn.run(c)
+    assert one(c, L1)["for"] == before + 1
+    assert one(c, "pin the start period on compose services")["origin"] == "research"
+
+
+def test_r2_f6_an_answer_never_supports_the_revision_it_wrote(cfg, user_config, fake_model):
+    c = cfg()
+    for i, text in enumerate([L1, L1b], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    old = one(c, L1)
+    reply = ("## Answer\nno\n\n## Confidence\n90\n\n## Belief\n"
+             + draft(statement="recall by the task", applies="session start", revises=old["bid"]))
+    _researcher(user_config, fake_model, reply)
+    config_mod.set_grant("research", True)
+    c = cfg()
+    _gap(c, "does it hold", signal="contradiction", evidence=["session:2"], belief=old["source_id"])
+    research.run(c, 1)
+    rows = report(c)
+    assert rows[L1]["against"] == 1 and rows[L1]["status"] == "retired"
+    assert rows["recall by the task"]["for"] == 2                # inherited, not the answer itself
+
+
+def test_r2_f7_a_stale_revision_is_not_injected_at_start(cfg, reviser):
+    reviser(statement="recall only the unfinished part at session start",
+            applies="resuming the same task", not_when="a different task")
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    put(c, "session:4", metadata={"beliefs_listed": [one(c, L1)["bid"]]}, Pitfalls=COUNTER)
+    learn.run(c)
+    new = one(c, "recall only the unfinished part at session start")
+    assert new["bid"] in recall.assemble(c)
+    learn.mark_stale(c, new["source_id"])
+    assert new["bid"] not in recall.assemble(c)
+
+
+def test_r2_f8_a_revision_in_hypothesis_stays_injected_after_its_first_test(cfg, reviser):
+    reviser(statement="recall only the unfinished part at session start",
+            applies="resuming the same task", not_when="a different task")
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    bid = one(c, L1)["bid"]
+    for i in (2, 3):
+        put(c, f"session:{i}", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
+    learn.run(c)
+    new = one(c, "recall only the unfinished part at session start")
+    assert new["status"] == "hypothesis"
+    put(c, "session:4", metadata={"beliefs_listed": [new["bid"]],
+                                  "belief_checks": {new["source_id"]: "followed"}}, Unfinished="- x")
+    learn.run(c)
+    assert new["bid"] in recall.assemble(c)
+
+
+def test_r2_f9_reset_writes_nothing_and_a_rejected_gap_is_not_asked_again(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n')
+    c = cfg()
+    put(c, "session:1", Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
+    learn.run(c)
+    gap = [e for e in writes.pending(c) if e["record"]["kind"] == "gap"][0]
+    writes.reject(c, gap["id"])
+    learn.run(c, reset_state=True)
+    learn.run(c)
+    assert writes.pending(c) == []
+
+
+def test_r2_f9_revision_of_a_revision_history_is_in_order(cfg, reviser):
+    reviser(statement="recall only the unfinished part at session start",
+            applies="resuming the same task", not_when="a different task")
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    put(c, "session:2", metadata={"beliefs_listed": [one(c, L1)["bid"]]}, Pitfalls=COUNTER)
+    put(c, "session:3", metadata={"beliefs_listed": [one(c, L1)["bid"]]}, Pitfalls=COUNTER)
+    learn.run(c)
+    r1 = one(c, "recall only the unfinished part at session start")
+    chain = learn.history(c, r1["source_id"])
+    first = [h["status"] for h in chain[1]["history"]]
+    assert first[0] == "hypothesis" and "retired" not in first[:-1]
+
+
+def test_r2_o2_a_held_revision_is_not_redrafted_every_run(cfg, user_config, fake_model):
+    calls = cfg.__class__  # placeholder to keep fixtures in signature order
+    reply = draft(statement="ghp_" + "a" * 36 + " is the fix", applies="x", not_when="y")
+    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(reply))}\n')
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    for i in (2, 3):
+        put(c, f"session:{i}", metadata={"beliefs_listed": [one(c, L1)["bid"]]}, Pitfalls=COUNTER)
+    for _ in range(3):
+        learn.run(c)
+    assert len([e for e in writes.held(c) if e["record"]["kind"] == "belief"]) == 1
+    del calls
+
+
+def test_r2_o3_rulings_in_migrated_journals_are_not_the_persons(cfg, no_model, tmp_path):
+    from nimblemind import migrate
+    src = tmp_path / "old"
+    src.mkdir()
+    (src / "j1.md").write_text(jtext(Rulings="- ship on fridays"), encoding="utf-8")
+    migrate.run(cfg(), src, "journal")
+    c = cfg()
+    learn.run(c)
+    b = learn.report(c)[0]
+    assert b["origin"] == "lessons" and not b["pinned"]
+
+
+def test_r2_o6_a_session_shown_the_answer_does_not_restate_its_belief(cfg, user_config, fake_model):
+    reply = ("## Answer\nx\n\n## Confidence\n90\n\n## Belief\n"
+             + draft(statement="pin compose healthchecks with a start period", applies="compose services"))
+    _researcher(user_config, fake_model, reply)
+    config_mod.set_grant("research", True)
+    c = cfg()
+    _gap(c, "why do compose services fail on the first start")
+    research.run(c, 1)
+    ans = learn.stored(c, "answer")[0].source_id
+    put(c, "session:9", metadata={"records_shown": [ans]},
+        Lessons_learned="- pin compose healthchecks with a start period for compose services")
+    learn.run(c)
+    assert one(c, "pin compose healthchecks with a start period")["for"] == 0
