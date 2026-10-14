@@ -180,7 +180,11 @@ def cmd_hook(args) -> int:
                 block, ids = recall.assemble_with_ids(cfg)
                 render = h.session_start_output
             else:
-                block, ids = recall.prompt_block(cfg, payload.get("prompt", ""), sid)
+                # A transcript key may be shared by separate sessions of a
+                # harness that reuses its file: it records what was shown, for
+                # learning, but never withholds anything from a prompt.
+                block, ids = recall.prompt_block(cfg, payload.get("prompt", ""),
+                                                 "" if sid.startswith("t:") else sid)
                 render = h.prompt_output
             recall.remember(sid, ids if block else [])
             if block:
