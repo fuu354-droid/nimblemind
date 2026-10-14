@@ -83,6 +83,8 @@ def _mark(e: dict) -> str:
     st = e["status"]
     if st == "challenged":
         return "challenged: counter-evidence, being revised"
+    if st == "stale":
+        return "stale: something it depends on changed"
     if learn.is_verifying(e):
         return "revised: verifying"
     if st == "stale":
@@ -224,13 +226,21 @@ def injected(session_id: str) -> set[str]:
     return {i for i in ids if isinstance(i, str)} if isinstance(ids, list) else set()
 
 
-def prune() -> None:
-    """Drop session files older than a week; every hook run calls it."""
+def prune(keep: str = "") -> None:
+    """Drop session files older than a week; every hook run calls it. The
+    calling session's own file is kept and touched: a session idle for a
+    week still has to know, at its end, what it was shown."""
     d = data_home() / "run" / "sessions"
+    mine = _session_file(keep) if keep else None
+    if mine is not None and mine.exists():
+        try:
+            os.utime(mine)
+        except OSError:
+            pass
     now = time.time()
     for other in d.glob("*.json") if d.is_dir() else []:
         try:
-            if now - other.stat().st_mtime > SESSION_TTL:
+            if other != mine and now - other.stat().st_mtime > SESSION_TTL:
                 other.unlink()
         except OSError:
             pass

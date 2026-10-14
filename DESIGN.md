@@ -723,8 +723,9 @@ person's journal), and that journal is its first `restated` evidence. A
 retired belief still covers: restating a refuted belief is not a first
 observation and never brings it back as a new one. New
 journals are handled oldest first, and a run stops once it has created
-`learn.max_new` (default 25) beliefs; the rest wait for the next run, which
-only spreads the writes: the derivation is the same either way.
+`learn.max_new` (default 25) beliefs, part way through a journal if need
+be; the rest wait for the next run, which only spreads the writes: the
+derivation is the same either way.
 
 ### 15.5 Revision and revalidation
 
@@ -779,7 +780,8 @@ belief) and of the same kind merges into it instead of adding one: every
 matching journal is an occurrence, whenever it is from. A verified gap
 absorbs a journal older than its answer (an old occurrence approved late)
 and never reopens for it; a newer one is a new question. At most five new gaps per run, highest
-weight first; the rest are written by later runs.
+impact first (weight times `1 + log2(journals)`, as ranked below); the
+rest are written by later runs.
 
 `research` ranks `open` and `recurred` gaps:
 

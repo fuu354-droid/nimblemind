@@ -801,7 +801,10 @@ def _new_beliefs_from_journals(cfg, w: _World, state: dict, done: set[str]) -> t
     # Retired beliefs still cover: restating a refuted or retired belief is not
     # a first observation, and a fresh belief would inherit the old support
     # without the counter-examples that retired it.
-    cover = [(signature(p), pinned) for p, pinned, _ in _all_beliefs_for_coverage(cfg)]
+    retired = {sid for sid, e in state["beliefs"].items() if e["status"] == "retired"}
+    # (signature, a person's and still standing). A person's retired belief
+    # never absorbs their new ruling: that is a new word of theirs.
+    cover = [(signature(p), pinned and sid not in retired) for p, pinned, sid in _all_beliefs_for_coverage(cfg)]
     created, signals = 0, []
     for j in w.journals:
         if "signals:" + _token(j.source_id) not in done:
@@ -818,15 +821,14 @@ def _new_beliefs_from_journals(cfg, w: _World, state: dict, done: set[str]) -> t
             if any(similar(t, f[2], th) and (f[0] == "ruling") == ruling for f in fresh):
                 continue
             fresh.append(("ruling" if ruling else "lessons", item, t))
-        if created + len(fresh) > lr["max_new"] and created:
-            created = lr["max_new"]   # the rest waits for the next run, in order
-            continue
-        for origin, item, t in fresh:
+        room = lr["max_new"] - created
+        for origin, item, t in fresh[:room]:
             state_, sid = new_belief(cfg, item, "", "", origin=origin, evidence=[j.source_id])
             if state_ in ("stored", "pending"):
                 created += 1
                 cover.append((t, origin == "ruling"))
-        _mark_done(cfg, key)
+        if len(fresh) <= room:
+            _mark_done(cfg, key)       # else the rest of it waits for the next run
     return created, signals
 
 

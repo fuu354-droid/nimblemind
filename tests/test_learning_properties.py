@@ -72,7 +72,9 @@ def check(c, total):
             assert r["status"] in ("supported", "established"), r
     for bid, e in fresh["beliefs"].items():
         if e["pinned"]:
-            assert all(h["status"] in ("supported", "established", "hypothesis") for h in e["history"][1:]), e["history"]
+            # Never below supported, from the first entry; retired only by a
+            # person (the loop never retires a pinned belief by evidence).
+            assert all(h["status"] in ("supported", "established", "retired") for h in e["history"]), e["history"]
     block = recall.assemble(c)
     assert len(block) <= total, (len(block), total)
 

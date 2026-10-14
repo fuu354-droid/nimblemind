@@ -1304,3 +1304,68 @@ def test_r6_a_pinned_beliefs_history_starts_supported(cfg, no_model):
     learn.run(c)
     h = learn.history(c, f"belief:{bid}")[0]["history"]
     assert [x["status"] for x in h] == ["supported"]
+
+
+# ---- v0.2.0 round 7 findings ----------------------------------------------
+
+def test_r7_f1_session_end_keeps_what_an_idle_session_was_shown(cfg, tmp_path, monkeypatch):
+    import os
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    sid = one(c, L1)["source_id"]
+    recall.remember("S", [sid])
+    f = recall._session_file("S")
+    past = time.time() - 8 * 86400
+    os.utime(f, (past, past))
+    seen = []
+    monkeypatch.setattr(distill, "spawn", lambda *a, **k: seen.append(recall.injected("S")))
+    t = tmp_path / "t.jsonl"
+    t.write_text("{}", encoding="utf-8")
+    _hook(monkeypatch, "session-end", {"session_id": "S", "cwd": str(tmp_path), "transcript_path": str(t)})
+    assert seen == [{sid}]
+
+
+def test_r7_f2_a_ruling_like_a_retired_belief_of_the_persons_is_a_new_belief(cfg, no_model):
+    c = cfg()
+    bid = _person_belief(c)
+    learn.retire(c, f"belief:{bid}")
+    _person_journal(c, "session:1", Rulings="- never recall the newest journal in full at session start to resume work")
+    assert learn.run(c)["beliefs_created"] == 1
+    new = one(c, "never recall the newest journal in full at session start to resume work")
+    assert new["origin"] == "ruling" and new["pinned"]
+
+
+def test_r7_f3_a_stale_revision_is_marked_stale_at_the_prompt_hook(cfg, reviser):
+    reviser(statement=REV, applies="resuming the same task", not_when="a different task")
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    put(c, "session:4", metadata={"beliefs_listed": [one(c, L1)["bid"]]}, Pitfalls=COUNTER)
+    learn.run(c)
+    learn.mark_stale(c, one(c, REV)["source_id"])
+    block, _ = recall.prompt_block(c, "recall only the unfinished part at session start when resuming", "s")
+    assert "[stale" in block and "revised: verifying" not in block
+
+
+def test_r7_o1_hermes_forget_refuses_records_that_are_not_its_own(cfg):
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent / "integrations" / "hermes"))
+    try:
+        from provider import NimblemindMemoryProvider
+    finally:
+        sys.path.pop(0)
+    c = cfg()
+    bid = _person_belief(c)
+    assert NimblemindMemoryProvider().forget(f"belief:{bid}") is False
+    assert one(c, L1)["pinned"]
+
+
+def test_r7_o4_one_journal_never_exceeds_max_new(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n[learn]\nmax_new = 2\n')
+    c = cfg()
+    put(c, "session:1", Lessons_learned="- alpha bravo charlie matters\n- delta echo foxtrot matters\n"
+                                        "- golf hotel india matters")
+    assert learn.run(c)["beliefs_created"] == 2
+    assert learn.run(c)["beliefs_created"] == 1
+    assert len(learn.report(c)) == 3

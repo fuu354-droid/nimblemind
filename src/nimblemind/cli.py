@@ -173,7 +173,7 @@ def cmd_hook(args) -> int:
             payload = h.read_payload(raw)
             cfg = config_mod.load(_hook_cwd(payload))
         cfg.data["harness"] = h.name
-        recall.prune()
+        recall.prune(keep=payload.get("session_id", ""))
         if args.event in ("session-start", "prompt"):
             sid = payload.get("session_id", "")
             if args.event == "session-start":
