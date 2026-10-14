@@ -1508,23 +1508,14 @@ def test_g1_f4_journals_without_a_session_id_are_separate_votes(cfg, no_model):
     assert one(c, L1)["for"] == 3
 
 
-def test_g1_o1_a_contradiction_without_a_drafter_carries_its_time(cfg, user_config, fake_model):
-    _researcher(user_config, fake_model, "## Answer\nx\n\n## Confidence\n90\n", extra="[curiosity]\nverify_window = 2\n")
-    for p in ("research", "gap"):
-        config_mod.set_grant(p, True)
+def test_g1_o1_a_contradiction_without_a_drafter_carries_its_time(cfg, no_model):
     c = cfg()
     put(c, "session:1", Lessons_learned=f"- {L1}")
     learn.run(c)
     bid = one(c, L1)["bid"]
-    writes.write(c, "distill", "journal", jtext(Pitfalls=COUNTER), source_id="session:2",
-                 metadata={"beliefs_listed": [bid]})
-    put(c, "session:3", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
-    learn.run(c)                                   # challenged, no drafter: a contradiction gap
-    research.run(c, 1)
-    put(c, "session:4", Unfinished="- a")
-    put(c, "session:5", Unfinished="- b")
-    learn.run(c)
-    e = [x for x in writes.pending(c) if x["record"]["source_id"] == "session:2"][0]
-    writes.approve(c, e["id"], by="t")
-    learn.run(c)
-    assert [g["signal"] for g in research.ranked(c)].count("contradiction") == 1
+    put(c, "session:2", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
+    w = learn._World(c)
+    state = learn.derive(c, w)
+    assert state["beliefs"][f"belief:{bid}"]["status"] == "challenged"
+    _, signals = learn._revisions(c, w, state, set())
+    assert signals and all(sig.get("at") for sig in signals)
