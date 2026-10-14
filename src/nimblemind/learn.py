@@ -1,45 +1,50 @@
-"""The learning loop (DESIGN.md section 15): notice, ask, update what is
-believed, and check later whether it changed what happened.
+"""The learning loop (DESIGN.md section 15): knowledge that evolves with
+experience.
 
-Everything that decides is a rule in this file: which journal items are
-signals, when two items are the same thing, when a gap is merged, when a
-lesson becomes a principle, when a principle is holding. A model only writes
-a principle's wording, and with `distiller.command = "none"` not even that.
+Every stored journal is evidence for or against what is already believed.
+A first observation is a hypothesis; independent sessions support it; a
+session where it applied and the problem happened anyway counts against it;
+a challenged belief is revised under narrower conditions and the revision
+replaces it. Everything that decides is a rule in this file: what counts as
+evidence, what is independent, how confidence moves, which status follows.
+A model only writes a revision's wording, and with `distiller.command =
+"none"` not even that.
 
-State that changes over time (statuses, counts, which journals were read)
-lives in `<home>/learn/<ns>/state.json` and holds ids, enumerated words,
-numbers and timestamps only. Free text is always a record, written through
-`writes.write`, so it passes isolation and approval like every other write.
+Changing state (evidence lists, statuses, transitions, gap lifecycles, which
+journals were read) lives in `<home>/learn/<ns>/state.json` and holds ids,
+enumerated words, numbers and timestamps only. Free text is always a record,
+written through `writes.write`, so it passes isolation like every write.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import re
 import secrets
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
-from nimblemind import approval, journal, model, paths, writes
+from nimblemind import journal, model, paths, writes
 from nimblemind.backends.local import tokens
 from nimblemind.fsutil import append_line, atomic_write, file_lock, read_text
-from nimblemind.records import Record, now_iso
+from nimblemind.records import Record, now_iso, stamp
 
-STATE_VERSION = 1
+STATE_VERSION = 2
+STATUSES = ("hypothesis", "supported", "established", "challenged", "stale", "retired")
+APPLYING = ("supported", "established", "challenged")
 GAP_STATUSES = ("open", "answered", "parked", "verified", "recurred")
-VERDICTS = ("not-holding", "untested", "unused", "holding")
-CHECK_WORDS = ("followed", "violated", "n/a")
-WEIGHT = {"recurring": 2, "surprise": 3, "not-holding": 4}
-MAX_NEW_GAPS = 5        # per run: a migrated history must not flood the queue
-MAX_PROPOSALS = 3       # principles drafted per run, for the same reason
+PINNED_ORIGINS = ("person", "ruling")
+WEIGHT = {"contradiction": 5, "not-holding": 4, "surprise": 3, "recurring": 2}
+MAX_NEW_GAPS = 5
 
 TEMPLATES = {
     "recurring": "Why does this keep happening, and what would prevent it: ",
     "surprise": "What explains this result differing from what was expected: ",
 }
-NOT_HOLDING = "Principle {pid} exists but was not applied ({jid}): what in the workflow lets it be skipped?"
+NOT_HOLDING = "Belief {bid} applied but was not followed ({jid}): what in the workflow lets it be skipped?"
+CONTRADICTION = "Evidence goes against belief {bid} ({jid}): under what conditions does it actually hold?"
 
 # A fixed list, so similarity never depends on a model or a locale.
 STOP = frozenset("""
@@ -53,8 +58,7 @@ when where which while who whom why will with would you your yours yet still aga
 one two new use used using get got make made via per across within without
 """.split())
 
-_ID = re.compile(r"^(P|G)-[0-9a-f]{8}$")
-_CHECK_LINE = re.compile(r"^-\s*(P-[0-9a-f]{8})\s*:\s*(followed|violated|n/a)\b", re.IGNORECASE)
+_CHECK_LINE = re.compile(r"^-\s*(B-[0-9a-f]{8})\s*:\s*(followed|violated|n/a)\b", re.IGNORECASE)
 _TOKEN_STR = re.compile(r"^\S{1,300}$")
 
 
@@ -98,19 +102,19 @@ def _field(content: str, label: str) -> str:
     return ""
 
 
-def principle_text(pid: str, statement: str, applies: str, not_when: str) -> str:
-    one = lambda s: " ".join(s.split())  # noqa: E731 - labels are line-based
-    return (f"# Principle {pid}\nStatement: {one(statement)}\n"
+def belief_text(bid: str, statement: str, applies: str, not_when: str) -> str:
+    def one(s):
+        return " ".join(s.split())  # labels are line-based
+    return (f"# Belief {bid}\nStatement: {one(statement)}\n"
             f"Applies when: {one(applies) or 'unspecified'}\nNot when: {one(not_when) or 'none'}\n")
 
 
-def parse_principle(content: str) -> dict | None:
-    first = content.split("\n", 1)[0]
-    m = re.fullmatch(r"# Principle (P-[0-9a-f]{8})", first.strip())
+def parse_belief(content: str) -> dict | None:
+    m = re.fullmatch(r"# Belief (B-[0-9a-f]{8})", content.split("\n", 1)[0].strip())
     statement = _field(content, "Statement")
     if not m or not statement:
         return None
-    return {"pid": m.group(1), "statement": statement,
+    return {"bid": m.group(1), "statement": statement,
             "applies_when": _field(content, "Applies when"),
             "not_when": _field(content, "Not when")}
 
@@ -128,8 +132,8 @@ def parse_gap(content: str) -> dict | None:
 
 
 def gap_subject(question: str) -> str:
-    """The part of a gap's question that names the thing, without its
-    template wording, so two gaps about one thing compare as one."""
+    """A gap's question without its template wording, so two gaps about one
+    thing compare as one."""
     for prefix in TEMPLATES.values():
         if question.startswith(prefix):
             return question[len(prefix):]
@@ -143,19 +147,34 @@ def new_id(prefix: str, taken: set[str]) -> str:
             return i
 
 
-def item_hash(item: str) -> str:
-    return hashlib.sha256(" ".join(item.split()).encode("utf-8")).hexdigest()[:32]
-
-
-def principle_checks(text: str, listed: set[str]) -> dict[str, str]:
-    """`{principle source id: verdict}` from a journal's `Principle checks`
+def belief_checks(text: str, listed: set[str]) -> dict[str, str]:
+    """`{belief source id: verdict}` from a journal's `Belief checks`
     section, keeping only ids that were listed to the distiller."""
     out = {}
-    for line in journal.section(text, "Principle checks").split("\n"):
+    for line in journal.section(text, journal.CHECKS).split("\n"):
         m = _CHECK_LINE.match(line.strip())
         if m and m.group(1) in listed:
-            out["principle:" + m.group(1)] = m.group(2).lower()
+            out["belief:" + m.group(1)] = m.group(2).lower()
     return out
+
+
+def _when(iso) -> datetime:
+    """A stored time as a datetime, so a whole-second time and a microsecond
+    stamp compare by time, not as strings."""
+    try:
+        t = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def after(a, b) -> bool:
+    """Whether time `a` is strictly later than time `b`."""
+    return _when(a) > _when(b)
+
+
+def signature(b: dict) -> frozenset:
+    return content_tokens(b["statement"] + " " + b.get("applies_when", ""))
 
 
 # ---- state ---------------------------------------------------------------
@@ -171,14 +190,11 @@ def _lock_file(cfg, namespace: str = "") -> Path:
 
 
 def empty_state() -> dict:
-    return {"version": STATE_VERSION, "consumed": [], "proposed": [], "gaps": {},
-            "principles": {}}
+    return {"version": STATE_VERSION, "consumed": [], "beliefs": {}, "gaps": {}}
 
 
 def _check_value(v, where: str) -> None:
-    if v is None or isinstance(v, bool):
-        return
-    if isinstance(v, int):
+    if v is None or isinstance(v, (bool, int)):
         return
     if isinstance(v, float):
         if not math.isfinite(v):
@@ -210,6 +226,15 @@ def validate_state(data) -> dict:
         if not isinstance(data.get(k, v), type(v)):
             raise StateError(f"{k}: wrong type")
     _check_value(data, "state")
+    for bid, b in data.get("beliefs", {}).items():
+        if not isinstance(b, dict) or b.get("status") not in STATUSES:
+            raise StateError(f"beliefs.{bid}: missing or unknown status")
+        ev = b.get("evidence")
+        if not isinstance(ev, list) or not all(
+                isinstance(e, dict) and e.get("dir") in ("for", "against") for e in ev):
+            raise StateError(f"beliefs.{bid}: malformed evidence")
+        if not isinstance(b.get("history"), list):
+            raise StateError(f"beliefs.{bid}: malformed history")
     for gid, g in data.get("gaps", {}).items():
         if not isinstance(g, dict) or g.get("status") not in GAP_STATUSES:
             raise StateError(f"gaps.{gid}: missing or unknown status")
@@ -248,41 +273,116 @@ def _log(cfg, msg: str) -> None:
     append_line(cfg.layout().logs / "learn.log", f"{now_iso()} {msg}")
 
 
-# ---- reading the store ---------------------------------------------------
+# ---- beliefs -------------------------------------------------------------
 
 def stored(cfg, kind: str, namespace: str = "") -> list[Record]:
     """Stored records of one kind, oldest first. Never pending or held."""
     ns = namespace or cfg.namespace
     recs = [r for r in writes.canonical(cfg).list(ns) if r.kind == kind]
-    return sorted(recs, key=lambda r: r.created_at)
+    return sorted(recs, key=lambda r: (_when(r.created_at), r.source_id))
 
 
-def activation_times(cfg) -> dict[str, str]:
-    """When each record was approved (its newest approval entry), by id."""
-    log = approval.latest(cfg.layout().approvals)
-    return {sid: e.get("approved_at", "") for (ns, sid), e in log.items()
-            if ns == cfg.namespace}
+def _counts(entry: dict) -> tuple[int, int]:
+    s = sum(1 for e in entry["evidence"] if e["dir"] == "for")
+    return s, len(entry["evidence"]) - s
 
 
-def active_principles(cfg, state: dict | None = None) -> list[tuple[Record, dict]]:
-    """Stored principles that nothing supersedes and nobody retired, newest
-    first, with their parsed fields."""
+def confidence(entry: dict) -> float:
+    s, c = _counts(entry)
+    return round((s + 1) / (s + 2 * c + 2), 4)
+
+
+def _status(entry: dict, superseded: bool) -> str:
+    """Section 15.4, first match wins."""
+    ev = entry["evidence"]
+    s, c = _counts(entry)
+    conf = (s + 1) / (s + 2 * c + 2)
+    pinned = entry.get("pinned", False)
+    if superseded or entry.get("retired_at"):
+        return "retired"
+    if not pinned and c >= 2 and conf < 0.25:
+        return "retired"
+    stale = entry.get("stale_since")
+    if stale and not any(e["dir"] == "for" and after(e["at"], stale) for e in ev):
+        return "stale"
+    if not pinned and ev and ev[-1]["dir"] == "against" and conf < 0.6:
+        return "challenged"
+    if s >= 4 and conf >= 0.8:
+        return "established"
+    if (s >= 2 and conf >= 0.6) or pinned:
+        return "supported"
+    return "hypothesis"
+
+
+def _fresh_entry(rec: Record) -> dict:
+    origin = rec.metadata.get("origin") if isinstance(rec.metadata.get("origin"), str) else ""
+    if not _TOKEN_STR.match(origin or "x"):
+        origin = ""
+    return {"status": "hypothesis", "confidence": 0.5, "evidence": [], "history": [],
+            "pinned": origin in PINNED_ORIGINS, "origin": origin,
+            "stale_since": None, "retired_at": None, "revised": False}
+
+
+def _entry(state: dict, rec: Record) -> dict:
+    """The state entry for a stored belief, created on first sight."""
+    e = state["beliefs"].get(rec.source_id)
+    if e is None:
+        e = state["beliefs"][rec.source_id] = _fresh_entry(rec)
+    return e
+
+
+def _superseded(cfg) -> set[str]:
+    return {r.metadata.get("supersedes") for r in stored(cfg, "belief") if r.metadata.get("supersedes")}
+
+
+def _restatus(state: dict, sid: str, superseded: set[str], at: str, cause: str) -> str:
+    e = state["beliefs"][sid]
+    new = _status(e, sid in superseded)
+    e["confidence"] = confidence(e)
+    if new != e["status"]:
+        e["history"].append({"status": new, "at": at, "cause": cause})
+        e["status"] = new
+    return new
+
+
+def _add_evidence(state: dict, sid: str, direction: str, kind: str, ref: str, at: str) -> bool:
+    """At most one `for` and one `against` per belief and source (section
+    15.3): one session, one vote."""
+    e = state["beliefs"][sid]
+    if any(x["dir"] == direction and x["ref"] == ref for x in e["evidence"]):
+        return False
+    e["evidence"].append({"dir": direction, "kind": kind, "ref": ref, "at": at})
+    return True
+
+
+def beliefs(cfg, state: dict | None = None) -> list[tuple[Record, dict, dict]]:
+    """Every stored belief with its parsed text and state entry (a fresh one
+    when the state has not seen it yet), newest first."""
     state = state if state is not None else load_state(cfg)
-    recs = stored(cfg, "principle")
+    recs = stored(cfg, "belief")
     superseded = {r.metadata.get("supersedes") for r in recs if r.metadata.get("supersedes")}
     out = []
     for r in recs:
-        p = parse_principle(r.content)
-        if not p or r.source_id in superseded:
+        p = parse_belief(r.content)
+        if not p:
             continue
-        if (state["principles"].get(r.source_id) or {}).get("retired_at"):
-            continue
-        out.append((r, p))
+        e = state["beliefs"].get(r.source_id)
+        if e is None:
+            e = _fresh_entry(r)
+            e["status"] = _status(e, r.source_id in superseded)
+        elif r.source_id in superseded and e["status"] != "retired":
+            e = {**e, "status": "retired"}
+        out.append((r, p, e))
     return list(reversed(out))
 
 
-def principle_signature(p: dict) -> frozenset:
-    return content_tokens(p["statement"] + " " + p.get("applies_when", ""))
+def applying(cfg, state: dict | None = None) -> list[tuple[Record, dict, dict]]:
+    """Beliefs a session works from (section 15.8): supported, established,
+    challenged, a revision still being verified, and every pinned belief that
+    is not retired."""
+    return [(r, p, e) for r, p, e in beliefs(cfg, state)
+            if e["status"] in APPLYING or (e["status"] != "retired" and e.get("pinned"))
+            or (e["status"] == "hypothesis" and e.get("origin") == "revision")]
 
 
 # ---- gaps ----------------------------------------------------------------
@@ -292,19 +392,19 @@ def _gap_entry(state: dict, rec: Record) -> dict:
     if g is None:
         ev = [e for e in (rec.metadata.get("evidence") or []) if isinstance(e, str)
               and _TOKEN_STR.match(e)]
-        g = {"status": "open", "signal": rec.metadata.get("signal") or "manual",
-             "occurrences": ev, "attempts": 0, "confidence": None, "answers": [],
-             "answered_at": None, "principle": rec.metadata.get("principle") or "",
-             "recurred": 0}
-        if g["signal"] not in WEIGHT and g["signal"] != "manual":
-            g["signal"] = "manual"
+        sig = rec.metadata.get("signal") if rec.metadata.get("signal") in WEIGHT else "manual"
+        bel = rec.metadata.get("belief") if isinstance(rec.metadata.get("belief"), str) else ""
+        g = {"status": "open", "signal": sig, "occurrences": ev, "attempts": 0,
+             "confidence": None, "answers": [], "answered_at": None,
+             "belief": bel if _TOKEN_STR.match(bel or "x") else "", "recurred": 0,
+             "evidence_given": False}
         state["gaps"][rec.source_id] = g
     return g
 
 
 def known_gaps(cfg) -> list[tuple[Record, str]]:
-    """Stored gaps and gaps still waiting for approval, with where each is.
-    A pending gap still blocks a duplicate: the person has not decided yet."""
+    """Stored gaps and gaps still waiting for approval. A pending gap still
+    blocks a duplicate: the person has not decided yet."""
     out = [(r, "stored") for r in stored(cfg, "gap")]
     for e in writes.pending(cfg):
         rec = e.get("record") or {}
@@ -316,15 +416,16 @@ def known_gaps(cfg) -> list[tuple[Record, str]]:
     return out
 
 
-def _merge_target(cfg, state, gaps, signal: str, subject: frozenset, pid: str,
-                  threshold: float):
-    for rec, where in gaps:
+def _merge_target(state, gaps, signal: str, subject: frozenset, bid: str, threshold: float):
+    for rec, _ in gaps:
         g = state["gaps"].get(rec.source_id)
         if g and g["status"] == "verified":
             continue
-        if signal == "not-holding":
-            if rec.metadata.get("principle") == pid:
+        if bid:
+            if rec.metadata.get("belief") == bid and rec.metadata.get("signal") == signal:
                 return rec
+            continue
+        if rec.metadata.get("belief"):
             continue
         parsed = parse_gap(rec.content)
         if parsed and similar(content_tokens(gap_subject(parsed["question"])), subject, threshold):
@@ -346,310 +447,346 @@ def _note_occurrence(state: dict, rec: Record, journal_id: str) -> None:
         g["attempts"] = 0
 
 
-# ---- the run -------------------------------------------------------------
-
-def _signals(cfg, state, journals, active, acts) -> list[dict]:
-    lr = cfg["learn"]
-    th = lr["similarity"]
-    consumed = set(state["consumed"])
-    pit_tokens = {j.source_id: [content_tokens(i) for _, i in items(j.content, lr["pitfall_sections"])]
-                  for j in journals}
-    out = []
-    for j in journals:
-        if j.source_id in consumed or not _TOKEN_STR.match(j.source_id):
-            continue
-        for _, item in items(j.content, lr["pitfall_sections"]):
-            t = content_tokens(item)
-            others = [o.source_id for o in journals if o.source_id != j.source_id
-                      and _TOKEN_STR.match(o.source_id)
-                      and any(similar(t, x, th) for x in pit_tokens[o.source_id])]
-            if len(others) >= lr["recur_min"] - 1:
-                # The evidence is every journal the pitfall appears in, so a
-                # new gap starts with its true occurrence count.
-                out.append({"signal": "recurring", "item": item, "tokens": t,
-                            "journal": j.source_id, "occurrences": len(others) + 1, "pid": "",
-                            "also": others})
-            for rec, p in active:
-                at = acts.get(rec.source_id, "")
-                if at and j.created_at > at and similar(t, principle_signature(p), th):
-                    out.append({"signal": "not-holding", "item": item, "tokens": t,
-                                "journal": j.source_id, "occurrences": 1, "pid": rec.source_id})
-        for _, item in items(j.content, lr["surprise_sections"]):
-            out.append({"signal": "surprise", "item": item, "tokens": content_tokens(item),
-                        "journal": j.source_id, "occurrences": 1, "pid": ""})
-        checks = j.metadata.get("principle_checks") or {}
-        for rec, p in active:
-            at = acts.get(rec.source_id, "")
-            if checks.get(rec.source_id) == "violated" and at and j.created_at > at:
-                out.append({"signal": "not-holding", "item": p["statement"], "tokens": frozenset(),
-                            "journal": j.source_id, "occurrences": 1, "pid": rec.source_id})
-    return out
-
-
-def _signals_to_gaps(cfg, state, journals, active, acts) -> dict:
+def _write_gaps(cfg, state, signals: list[dict]) -> dict:
     th = cfg["learn"]["similarity"]
-    signals = _signals(cfg, state, journals, active, acts)
     gaps = known_gaps(cfg)
-    merged = created = dropped = 0
+    merged = 0
     fresh: list[dict] = []
     for s in signals:
-        target = _merge_target(cfg, state, gaps, s["signal"], s["tokens"], s["pid"], th)
+        target = _merge_target(state, gaps, s["signal"], s["tokens"], s["belief"], th)
         if target is not None:
             _note_occurrence(state, target, s["journal"])
             merged += 1
             continue
-        # Two signals of one run about one thing become one gap.
         twin = next((f for f in fresh if f["signal"] == s["signal"] and (
-            (s["pid"] and f["pid"] == s["pid"]) or
-            (not s["pid"] and similar(f["tokens"], s["tokens"], th)))), None)
+            (s["belief"] and f["belief"] == s["belief"]) or
+            (not s["belief"] and not f["belief"] and similar(f["tokens"], s["tokens"], th)))), None)
         if twin:
-            if s["journal"] not in twin["journals"]:
-                twin["journals"].append(s["journal"])
+            for j in [*s.get("also", []), s["journal"]]:
+                if j not in twin["journals"]:
+                    twin["journals"].append(j)
             continue
-        fresh.append({**s, "journals": [*s.get("also", []), s["journal"]]})
-    fresh.sort(key=lambda f: -WEIGHT[f["signal"]] * (1 + math.log2(max(f["occurrences"], len(f["journals"])))))
+        fresh.append({**s, "journals": list(dict.fromkeys([*s.get("also", []), s["journal"]]))})
+    fresh.sort(key=lambda f: -WEIGHT[f["signal"]] * (1 + math.log2(len(f["journals"]))))
     taken = {r.source_id.removeprefix("gap:") for r, _ in gaps}
+    created = 0
     for f in fresh[:MAX_NEW_GAPS]:
         gid = new_id("G", taken)
         taken.add(gid)
+        bid = f["belief"].removeprefix("belief:")
         if f["signal"] == "not-holding":
-            question = NOT_HOLDING.format(pid=f["pid"].removeprefix("principle:"), jid=f["journal"])
+            question = NOT_HOLDING.format(bid=bid, jid=f["journal"])
+        elif f["signal"] == "contradiction":
+            question = CONTRADICTION.format(bid=bid, jid=f["journal"])
         else:
             question = TEMPLATES[f["signal"]] + f["item"]
         meta = {"signal": f["signal"], "evidence": f["journals"]}
-        if f["pid"]:
-            meta["principle"] = f["pid"]
-        r = writes.write(cfg, "gap", "gap", gap_text(gid, question, f["signal"]),
-                         source_id=f"gap:{gid}", metadata=meta)
+        if f["belief"]:
+            meta["belief"] = f["belief"]
+        content = gap_text(gid, question, f["signal"])
+        r = writes.write(cfg, "gap", "gap", content, source_id=f"gap:{gid}", metadata=meta)
         if r.state in ("stored", "pending"):
-            rec = Record(source_id=f"gap:{gid}", namespace=cfg.namespace, kind="gap",
-                         content=gap_text(gid, question, f["signal"]), metadata=meta)
-            _gap_entry(state, rec)
+            _gap_entry(state, Record(source_id=f"gap:{gid}", namespace=cfg.namespace, kind="gap",
+                                     content=content, metadata=meta))
             created += 1
         _log(cfg, f"gap {r.state} gap:{gid} {f['signal']}")
-    dropped = max(0, len(fresh) - MAX_NEW_GAPS)
-    for j in journals:
-        if j.source_id not in state["consumed"] and _TOKEN_STR.match(j.source_id):
-            state["consumed"].append(j.source_id)
-    return {"signals": len(signals), "merged": merged, "gaps_created": created,
-            "gaps_dropped": dropped}
+    return {"gaps_merged": merged, "gaps_created": created,
+            "gaps_dropped": max(0, len(fresh) - MAX_NEW_GAPS)}
 
 
-def _groups(cfg, journals) -> list[list[tuple[str, str, str, frozenset]]]:
-    """Lesson items grouped by similarity (single link): each group is a
-    list of (journal id, section, item, tokens)."""
-    lr = cfg["learn"]
-    flat = []
-    for j in journals:
-        for sec, item in items(j.content, lr["lesson_sections"]):
-            t = content_tokens(item)
-            if t:
-                flat.append((j.source_id, sec, item, t))
-    parent = list(range(len(flat)))
+# ---- the run -------------------------------------------------------------
 
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    by_token: dict[str, list[int]] = {}
-    for i, (_, _, _, t) in enumerate(flat):
-        for tok in t:
-            by_token.setdefault(tok, []).append(i)
-    seen = set()
-    for idx in by_token.values():
-        for a in range(len(idx)):
-            for b in range(a + 1, len(idx)):
-                i, k = idx[a], idx[b]
-                if (i, k) in seen:
-                    continue
-                seen.add((i, k))
-                if find(i) != find(k) and similar(flat[i][3], flat[k][3], lr["similarity"]):
-                    parent[find(i)] = find(k)
-    groups: dict[int, list] = {}
-    for i, entry in enumerate(flat):
-        groups.setdefault(find(i), []).append(entry)
-    return list(groups.values())
-
-
-DRAFT_SYSTEM = """You turn repeated lessons from an AI agent's work journals into one working principle.
-Reply with exactly these four lines and nothing else:
-Statement: <one sentence: what to do or not do>
-Applies when: <the situation that triggers it>
-Not when: <the exceptions, or none>
-Revises: <the id of ONE listed existing principle this replaces, or none>
-Keep the wording general enough to apply next time, specific enough to act on."""
-
-
-def _draft(cfg, group, overlapping) -> dict | None:
-    newest = max(group, key=lambda g: g[0])[2]
-    if cfg["distiller"].get("command") == "none":
-        return {"statement": newest, "applies_when": "unspecified", "not_when": "none",
-                "revises": ""}
-    lines = ["Lessons:"] + [f"- {item}" for _, _, item, _ in group[:12]]
-    if overlapping:
-        lines += ["", "Existing principles that overlap:"]
-        lines += [f"- {p['pid']}: {p['statement']} (applies when: {p['applies_when']})"
-                  for _, p in overlapping]
-    try:
-        text = model.run(cfg["distiller"], DRAFT_SYSTEM, "\n".join(lines)).text
-    except model.ModelError as e:
-        _log(cfg, f"draft failed: {e}")
+def new_belief(cfg, state, statement: str, applies: str, not_when: str, *, origin: str,
+               evidence: list[str], supersedes: str = "", path: str = "learn") -> str | None:
+    """Write one belief record; returns its id once stored, else None."""
+    taken = {sid.removeprefix("belief:") for sid in state["beliefs"]}
+    taken |= {r.source_id.removeprefix("belief:") for r in stored(cfg, "belief")}
+    bid = new_id("B", taken)
+    sid = f"belief:{bid}"
+    meta = {"origin": origin, "supersedes": supersedes, "evidence": evidence}
+    content = belief_text(bid, statement, applies, not_when)
+    r = writes.write(cfg, path, "belief", content, source_id=sid, metadata=meta)
+    _log(cfg, f"belief {r.state} {sid} origin={origin}" + (f" supersedes={supersedes}" if supersedes else ""))
+    if r.state != "stored":
         return None
-    out = {"statement": _field(text, "Statement"), "applies_when": _field(text, "Applies when"),
-           "not_when": _field(text, "Not when"), "revises": _field(text, "Revises")}
-    if not out["statement"] or not out["applies_when"] or not out["not_when"]:
-        _log(cfg, "draft refused: a label is missing")
-        return None
-    rev = out["revises"].strip().strip(".")
-    if rev.lower() in ("", "none"):
-        out["revises"] = ""
-    elif rev in {p["pid"] for _, p in overlapping}:
-        out["revises"] = rev
-    else:
-        _log(cfg, f"draft refused: revises {rev!r}, which is not an active principle it overlaps")
-        return None
-    return out
+    e = _entry(state, Record(source_id=sid, namespace=cfg.namespace, kind="belief",
+                             content=content, metadata=meta))
+    e["history"].append({"status": "hypothesis", "at": stamp(),
+                         "cause": supersedes or (evidence[0] if evidence else "new")})
+    return sid
 
 
-def _lessons_to_principles(cfg, state, journals, active) -> dict:
+def _evidence_from(cfg, state, j: Record, live: list[tuple[str, dict]]):
+    """Section 15.3 for one journal against the beliefs that existed before
+    it. Returns (signals, lesson items no belief covers)."""
     lr = cfg["learn"]
     th = lr["similarity"]
-    proposed = set(state["proposed"])
-    pending_principles = []
-    for e in writes.pending(cfg):
-        rec = e.get("record") or {}
-        if rec.get("kind") == "principle":
-            p = parse_principle(rec.get("content") or "")
-            if p:
-                pending_principles.append(p)
-    covering = [p for _, p in active] + pending_principles
-    candidates = []
-    for group in _groups(cfg, journals):
-        hashes = {item_hash(item) for _, _, item, _ in group}
-        if hashes <= proposed:
-            continue
-        spans = {jid for jid, _, _, _ in group}
-        ruled = any(sec in lr["ruling_sections"] for _, sec, _, _ in group)
-        if len(spans) < lr["recur_min"] and not ruled:
-            continue
-        gtok = frozenset().union(*(t for _, _, _, t in group))
-        cover = next((p for p in covering if any(
-            similar(t, principle_signature(p), th) for _, _, _, t in group)), None)
-        if cover is not None:
-            sid = "principle:" + cover["pid"]
-            entry = state["principles"].setdefault(sid, {"retired_at": None, "reinforced": [],
-                                                         "verdict": "untested"})
-            for jid in sorted(spans):
-                if jid not in entry["reinforced"]:
-                    entry["reinforced"].append(jid)
-            proposed |= hashes
-            continue
-        candidates.append((len(spans), max(spans), group, hashes, gtok, ruled))
-    candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
-    made = 0
-    taken = {r.source_id.removeprefix("principle:") for r in stored(cfg, "principle")}
-    for n, _, group, hashes, gtok, ruled in candidates[:MAX_PROPOSALS]:
-        overlapping = [(r, p) for r, p in active
-                       if gtok & principle_signature(p)]
-        draft = _draft(cfg, group, overlapping)
-        if draft is None:
-            continue           # tried again next run
-        pid = new_id("P", taken)
-        taken.add(pid)
-        meta = {"evidence": sorted({jid for jid, _, _, _ in group}),
-                "origin": "rulings" if ruled else "lessons",
-                "supersedes": ("principle:" + draft["revises"]) if draft["revises"] else ""}
-        r = writes.write(cfg, "learn", "principle",
-                         principle_text(pid, draft["statement"], draft["applies_when"],
-                                        draft["not_when"]),
-                         source_id=f"principle:{pid}", metadata=meta)
-        _log(cfg, f"principle {r.state} principle:{pid} from {n} journals")
-        if r.state in ("stored", "pending", "held"):
-            proposed |= hashes
-            made += 1
-    state["proposed"] = sorted(proposed)
-    return {"principles_proposed": made, "principle_candidates": len(candidates)}
+    meta = j.metadata if isinstance(j.metadata, dict) else {}
+    listed = {x for x in (meta.get("beliefs_listed") or []) if isinstance(x, str)}
+    checks = meta.get("belief_checks") if isinstance(meta.get("belief_checks"), dict) else {}
+    lessons = items(j.content, lr["lesson_sections"])
+    bad = [content_tokens(i) for _, i in items(j.content, lr["pitfall_sections"] + lr["surprise_sections"])]
+    changes = [content_tokens(i) for _, i in items(j.content, lr["change_sections"])]
+    at = j.created_at
+    signals = []
+    covered = set()
+    for sid, p in live:
+        e = state["beliefs"][sid]
+        sig = signature(p)
+        bid = sid.removeprefix("belief:")
+        for idx, (sec, item) in enumerate(lessons):
+            if similar(content_tokens(item), sig, th):
+                covered.add(idx)
+                if bid not in listed:
+                    _add_evidence(state, sid, "for", "restated", j.source_id, at)
+                    if sec in lr["ruling_sections"]:
+                        e["pinned"] = True     # a person's ruling endorses it
+        hit = any(similar(t, sig, th) for t in bad)
+        if checks.get(sid) == "followed" and not hit:
+            _add_evidence(state, sid, "for", "outcome", j.source_id, at)
+        if bid in listed and hit:
+            if _add_evidence(state, sid, "against", "counter", j.source_id, at) and e.get("pinned"):
+                signals.append({"signal": "contradiction", "belief": sid, "journal": j.source_id,
+                                "item": "", "tokens": frozenset()})
+        if checks.get(sid) == "violated":
+            signals.append({"signal": "not-holding", "belief": sid, "journal": j.source_id,
+                            "item": "", "tokens": frozenset()})
+        if any(similar(t, sig, th) for t in changes):
+            e["stale_since"] = at
+    fresh = [(sec, item) for idx, (sec, item) in enumerate(lessons) if idx not in covered]
+    # Two lessons of one journal about one thing are one observation.
+    unique: list[tuple[str, str]] = []
+    for sec, item in fresh:
+        if not any(similar(content_tokens(item), content_tokens(u), th) for _, u in unique):
+            unique.append((sec, item))
+    return signals, unique
 
 
-def report(cfg, state: dict | None = None) -> list[dict]:
-    """Section 15.8, per active principle, newest first."""
-    state = state if state is not None else load_state(cfg)
-    lr, cu = cfg["learn"], cfg["curiosity"]
+def _pitfall_signals(cfg, j: Record, journals: list[Record], pit_tokens: dict) -> list[dict]:
+    lr = cfg["learn"]
     th = lr["similarity"]
-    journals = stored(cfg, "journal")
-    acts = activation_times(cfg)
     out = []
-    for rec, p in active_principles(cfg, state):
-        at = acts.get(rec.source_id, rec.created_at)
-        sig = principle_signature(p)
-        after = [j for j in journals if j.created_at > at]
-        followed = sum(1 for j in after if (j.metadata.get("principle_checks") or {})
-                       .get(rec.source_id) == "followed")
-        violated = sum(1 for j in after if (j.metadata.get("principle_checks") or {})
-                       .get(rec.source_id) == "violated")
-        recurred = sum(1 for j in after if any(
-            similar(content_tokens(i), sig, th) for _, i in items(j.content, lr["pitfall_sections"])))
-        evidence = rec.metadata.get("evidence") or []
-        recent = after[-lr["stale_after"]:]
-        checked_recently = any(
-            (j.metadata.get("principle_checks") or {}).get(rec.source_id) in ("followed", "violated")
-            for j in recent)
-        if violated or recurred:
-            verdict = "not-holding"
-        elif len(after) < cu["verify_window"]:
-            verdict = "untested"
-        elif not checked_recently:
-            verdict = "unused"
-        else:
-            verdict = "holding"
-        out.append({"source_id": rec.source_id, "pid": p["pid"], "statement": p["statement"],
-                    "activated_at": at, "before": len(evidence), "after": recurred,
-                    "followed": followed, "violated": violated,
-                    "journals_since": len(after), "verdict": verdict})
+    for _, item in items(j.content, lr["pitfall_sections"]):
+        t = content_tokens(item)
+        others = [o.source_id for o in journals if o.source_id != j.source_id
+                  and _TOKEN_STR.match(o.source_id)
+                  and any(similar(t, x, th) for x in pit_tokens[o.source_id])]
+        if len(others) >= lr["recur_min"] - 1:
+            out.append({"signal": "recurring", "item": item, "tokens": t, "journal": j.source_id,
+                        "belief": "", "also": others})
+    for _, item in items(j.content, lr["surprise_sections"]):
+        out.append({"signal": "surprise", "item": item, "tokens": content_tokens(item),
+                    "journal": j.source_id, "belief": ""})
     return out
 
 
-def _verify(cfg, state, journals) -> dict:
-    window = cfg["curiosity"]["verify_window"]
-    verified = 0
-    for sid, g in state["gaps"].items():
-        if g["status"] != "answered" or not g.get("answered_at"):
+REVISE_SYSTEM = """A working belief of an AI agent was contradicted by experience.
+Rewrite it so it only claims what the evidence still supports.
+Reply with exactly these three lines and nothing else:
+Statement: <one sentence>
+Applies when: <narrowed to the situations where it held>
+Not when: <the situations of the counter-examples>"""
+
+
+def _revise(cfg, state, rec: Record, p: dict, superseded: set[str]) -> str | None:
+    if cfg["distiller"].get("command") == "none":
+        return None
+    e = state["beliefs"][rec.source_id]
+    local = writes.canonical(cfg)
+    lr = cfg["learn"]
+    counter = []
+    for ev in e["evidence"]:
+        if ev["dir"] != "against":
             continue
-        later = [j for j in journals if j.created_at > g["answered_at"]]
-        if len(later) >= window:
-            g["status"] = "verified"
-            verified += 1
-    return {"gaps_verified": verified}
+        j = local.get(ev["ref"], cfg.namespace)
+        if j is not None:
+            counter += [i for _, i in items(j.content, lr["pitfall_sections"] + lr["surprise_sections"])
+                        if similar(content_tokens(i), signature(p), lr["similarity"])]
+    user = (f"Belief {p['bid']}:\nStatement: {p['statement']}\nApplies when: {p['applies_when']}\n"
+            f"Not when: {p['not_when']}\n\nWhat happened while it applied:\n"
+            + "\n".join(f"- {c}" for c in counter[:10]))
+    try:
+        text = model.run(cfg["distiller"], REVISE_SYSTEM, user).text
+    except model.ModelError as err:
+        _log(cfg, f"revision of {rec.source_id} failed: {err}")
+        return None
+    st, ap, nw = _field(text, "Statement"), _field(text, "Applies when"), _field(text, "Not when")
+    if not st or not ap or not nw:
+        _log(cfg, f"revision of {rec.source_id} refused: a label is missing")
+        return None
+    new = new_belief(cfg, state, st, ap, nw, origin="revision",
+                     evidence=[ev["ref"] for ev in e["evidence"] if ev["dir"] == "against"],
+                     supersedes=rec.source_id)
+    if new:
+        # What held still held, now under narrower conditions.
+        state["beliefs"][new]["evidence"] = [dict(x) for x in e["evidence"] if x["dir"] == "for"]
+        e["revised"] = True
+        superseded.add(rec.source_id)
+    return new
 
 
 def run(cfg, *, reset_state: bool = False) -> dict:
-    """One `learn` pass (section 15.5), under the namespace's lock."""
+    """One `learn` pass, under the namespace's lock."""
     with file_lock(_lock_file(cfg)):
         state = empty_state() if reset_state else load_state(cfg)
-        journals = stored(cfg, "journal")
-        acts = activation_times(cfg)
-        active = active_principles(cfg, state)
-        summary = {}
-        summary.update(_signals_to_gaps(cfg, state, journals, active, acts))
-        summary.update(_lessons_to_principles(cfg, state, journals, active))
-        summary.update(_verify(cfg, state, journals))
-        verdicts = {r["source_id"]: r["verdict"] for r in report(cfg, state)}
-        for sid, v in verdicts.items():
-            state["principles"].setdefault(sid, {"retired_at": None, "reinforced": [],
-                                                 "verdict": v})["verdict"] = v
+        summary = _run(cfg, state)
         save_state(cfg, state)
     _log(cfg, "run " + " ".join(f"{k}={v}" for k, v in summary.items()))
     return summary
 
 
+def _run(cfg, state) -> dict:
+    lr = cfg["learn"]
+    journals = stored(cfg, "journal")
+    recs = stored(cfg, "belief")
+    superseded = {r.metadata.get("supersedes") for r in recs if r.metadata.get("supersedes")}
+    parsed: dict[str, tuple[Record, dict]] = {}
+    for r in recs:
+        p = parse_belief(r.content)
+        if p:
+            parsed[r.source_id] = (r, p)
+            _entry(state, r)
+    pit_tokens = {j.source_id: [content_tokens(i) for _, i in items(j.content, lr["pitfall_sections"])]
+                  for j in journals}
+    consumed = set(state["consumed"])
+    signals: list[dict] = []
+    created = read = 0
+    for j in journals:
+        if j.source_id in consumed or not _TOKEN_STR.match(j.source_id):
+            continue
+        if created >= lr["max_new"]:
+            break          # the rest of the history waits for the next run, in order
+        live = [(sid, p) for sid, (r, p) in parsed.items()
+                if sid not in superseded and state["beliefs"][sid]["status"] != "retired"
+                and not after(r.created_at, j.created_at)]
+        found, fresh = _evidence_from(cfg, state, j, live)
+        signals += found + _pitfall_signals(cfg, j, journals, pit_tokens)
+        for sec, item in fresh:
+            origin = "ruling" if sec in lr["ruling_sections"] else "lessons"
+            sid = new_belief(cfg, state, item, "", "", origin=origin, evidence=[j.source_id])
+            if sid:
+                created += 1
+                _add_evidence(state, sid, "for", "restated", j.source_id, j.created_at)
+                rec = writes.canonical(cfg).get(sid, cfg.namespace)
+                if rec is not None:
+                    parsed[sid] = (rec, parse_belief(rec.content))
+        for sid in parsed:
+            _restatus(state, sid, superseded, j.created_at, j.source_id)
+        state["consumed"].append(j.source_id)
+        read += 1
+    revised = 0
+    for sid, (r, p) in list(parsed.items()):
+        e = state["beliefs"][sid]
+        _restatus(state, sid, superseded, stamp(), "recheck")
+        if e["status"] != "challenged" or e.get("revised"):
+            continue
+        new = _revise(cfg, state, r, p, superseded)
+        if new:
+            revised += 1
+            rec = writes.canonical(cfg).get(new, cfg.namespace)
+            if rec is not None:
+                parsed[new] = (rec, parse_belief(rec.content))
+                _restatus(state, new, superseded, stamp(), sid)
+            _restatus(state, sid, superseded, stamp(), new)
+        else:
+            last = next((x for x in reversed(e["evidence"]) if x["dir"] == "against"), None)
+            if last:
+                signals.append({"signal": "contradiction", "belief": sid, "journal": last["ref"],
+                                "item": "", "tokens": frozenset()})
+    summary = {"journals_read": read, "beliefs_created": created, "beliefs_revised": revised}
+    summary.update(_write_gaps(cfg, state, signals))
+    summary.update(_verify(cfg, state, journals))
+    return summary
+
+
+def _verify(cfg, state, journals) -> dict:
+    window = cfg["curiosity"]["verify_window"]
+    verified = 0
+    for g in state["gaps"].values():
+        if g["status"] != "answered" or not g.get("answered_at"):
+            continue
+        if sum(1 for j in journals if after(j.created_at, g["answered_at"])) >= window:
+            g["status"] = "verified"
+            verified += 1
+    return {"gaps_verified": verified}
+
+
+def research_evidence(cfg, state, gap_rec: Record, answer_id: str, against: bool) -> None:
+    """A confident research answer about a belief's gap is evidence, once per
+    gap (section 15.3)."""
+    g = _gap_entry(state, gap_rec)
+    sid = g.get("belief")
+    if not sid or g.get("evidence_given") or sid not in state["beliefs"]:
+        return
+    _add_evidence(state, sid, "against" if against else "for", "research", answer_id, stamp())
+    g["evidence_given"] = True
+    _restatus(state, sid, _superseded(cfg), stamp(), answer_id)
+
+
+def report(cfg, state: dict | None = None) -> list[dict]:
+    out = []
+    for r, p, e in beliefs(cfg, state):
+        s, c = _counts(e)
+        out.append({"source_id": r.source_id, "bid": p["bid"], "statement": p["statement"],
+                    "applies_when": p["applies_when"], "not_when": p["not_when"],
+                    "status": e["status"], "confidence": confidence(e),
+                    "pinned": e.get("pinned", False), "origin": e.get("origin", ""),
+                    "for": s, "against": c, "supersedes": r.metadata.get("supersedes", ""),
+                    "last": e["history"][-1] if e["history"] else {}})
+    return out
+
+
+def history(cfg, source_id: str) -> list[dict]:
+    """The version chain through `source_id`, oldest first, each version with
+    its transitions and evidence."""
+    by_id = {r.source_id: r for r in stored(cfg, "belief")}
+    if source_id not in by_id:
+        return []
+    nxt = {r.metadata.get("supersedes"): sid for sid, r in by_id.items() if r.metadata.get("supersedes")}
+    head, seen = source_id, set()
+    while by_id[head].metadata.get("supersedes") in by_id and head not in seen:
+        seen.add(head)
+        head = by_id[head].metadata["supersedes"]
+    state = load_state(cfg)
+    chain, cur, seen = [], head, set()
+    while cur in by_id and cur not in seen:
+        seen.add(cur)
+        p = parse_belief(by_id[cur].content) or {}
+        e = state["beliefs"].get(cur) or {}
+        chain.append({"source_id": cur, "statement": p.get("statement", ""),
+                      "applies_when": p.get("applies_when", ""), "not_when": p.get("not_when", ""),
+                      "status": e.get("status", "hypothesis"), "history": e.get("history", []),
+                      "evidence": e.get("evidence", [])})
+        cur = nxt.get(cur)
+    return chain
+
+
 def retire(cfg, source_id: str) -> bool:
-    if not any(r.source_id == source_id for r, _ in active_principles(cfg)):
-        return False
+    """A person retires a belief (a terminal command)."""
     with locked_state(cfg) as state:
-        entry = state["principles"].setdefault(source_id, {"retired_at": None, "reinforced": [],
-                                                           "verdict": "untested"})
-        entry["retired_at"] = now_iso()
+        rec = writes.canonical(cfg).get(source_id, cfg.namespace)
+        if rec is None or rec.kind != "belief":
+            return False
+        e = _entry(state, rec)
+        if e["status"] == "retired":
+            return False
+        e["retired_at"] = stamp()
+        e["history"].append({"status": "retired", "at": e["retired_at"], "cause": "person"})
+        e["status"] = "retired"
     _log(cfg, f"retire {source_id}")
+    return True
+
+
+def mark_stale(cfg, source_id: str) -> bool:
+    """Something it depends on changed: trust it again only after new support."""
+    with locked_state(cfg) as state:
+        rec = writes.canonical(cfg).get(source_id, cfg.namespace)
+        if rec is None or rec.kind != "belief":
+            return False
+        e = _entry(state, rec)
+        if e["status"] == "retired":
+            return False
+        e["stale_since"] = stamp()
+        _restatus(state, source_id, _superseded(cfg), e["stale_since"], "person")
+    _log(cfg, f"stale {source_id}")
     return True

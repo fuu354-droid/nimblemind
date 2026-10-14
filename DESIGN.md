@@ -164,8 +164,8 @@ command = "claude-cli"
 model = "sonnet"
 
 [journal]
-sections = ["Decisions", "Rulings", "Pitfalls", "Surprises", "Unfinished",
-            "Lessons learned", "Improvements found"]
+sections = ["Decisions", "Rulings", "Pitfalls", "Surprises", "Changes",
+            "Unfinished", "Lessons learned", "Improvements found"]
 recall_sections = ["Unfinished", "Pitfalls"]
 core_sections = ["Unfinished"]   # [] injects the whole newest journal
 max_words = 500
@@ -174,7 +174,7 @@ banned_chars = []
 
 [budget]
 total_chars = 6000
-principles_chars = 1200
+beliefs_chars = 1200
 core_chars = 2500
 recall_chars = 2000
 prompt_chars = 3000
@@ -185,7 +185,7 @@ prompt_chars = 3000
 # gap = "ask"          does not override, so leave a path out to let
 # provider = "ask"     `nimblemind approval allow` apply to it
 # cli = "ask"
-# learn = "ask"        approving a learned principle is what activates it
+# learn = "ask"        beliefs update automatically unless this says ask
 
 [isolation]
 checks = ["builtin-secrets"]
@@ -194,6 +194,7 @@ checks = ["builtin-secrets"]
 auto = true
 similarity = 0.35
 recur_min = 2
+max_new = 5
 
 [curiosity]
 confidence_floor = 70
@@ -282,7 +283,8 @@ Nothing else in the package calls `Backend.store`.
 ## 7. Write approval
 
 - Each write path has a level: `ask`, `allow` or `deny`. The default for
-  every path is `ask`. A background run is never treated as authorized by
+  every path is `ask`, except `learn`, whose default is automatic (section
+  15.1). A background run is never treated as authorized by
   being in the background; only a person's command or a standing grant for
   that exact path stores anything.
 - `allow` is a standing grant, and it lives only in `<home>/approval.toml`,
@@ -385,9 +387,8 @@ At session start the package injects one block, assembled in this order and
 counted together against `budget.total_chars`:
 
 1. The source label line, `[nimblemind <namespace>]`, which counts.
-2. Principles: the active principles (section 15.6), whole items only,
-   capped at `principles_chars`. A principle reported `not-holding`
-   (section 15.8) comes first, then the rest newest first.
+2. Beliefs: those that apply (section 15.8), whole items only, capped at
+   `beliefs_chars`: challenged and revised ones first, then by confidence.
 3. Core memory: the newest approved journal's `journal.core_sections`
    (default `["Unfinished"]`), capped at `core_chars`. An empty
    `core_sections` list injects the whole journal, as v0.1.0 did.
@@ -396,7 +397,7 @@ counted together against `budget.total_chars`:
 5. A truncation note when anything was cut, which counts too.
 
 Each cap is a hard cut with a note, never a silent trim. Over the total,
-recall is dropped first, core is cut next, principles are cut last (whole
+recall is dropped first, core is cut next, beliefs are cut last (whole
 items, from the end). The per-prompt hook (section 10) has its own
 `prompt_chars` cap. No cap a person sets may be above `total_chars`, and
 config validation refuses that; a cap left at its default follows a lowered
@@ -421,15 +422,15 @@ Harness hooks, chosen by `harness`:
   every backend including `local`:
   1. A prompt with fewer than `budget.prompt_min_tokens` (default 3)
      distinct tokens injects nothing.
-  2. Principles whose statement and `Applies when` share at least
+  2. Beliefs whose statement and `Applies when` share at least
      `learn.match_min` (default 2) distinct content tokens (section 15.3)
      with the prompt come first, then up to `budget.prompt_k` recalled
-     records that are neither principles nor gaps, all under
+     records that are neither beliefs nor gaps, all under
      `[nimblemind <namespace> prompt]` and capped at `budget.prompt_chars`.
      The `local` backend is queried with the prompt's content tokens and a
      record must share `match_min` of them; any other backend is given the
      prompt text (its first 2000 characters) and ranks it itself. Over the
-     cap, related records are dropped whole from the end, then principles;
+     cap, related records are dropped whole from the end, then beliefs;
      when not even one record fits whole, the best match is cut to the room
      left. Every cut is named in a note.
   3. Nothing already injected into the same session (by session start or an
@@ -446,13 +447,13 @@ Model calls go through `distiller.command` and `researcher.command`:
 `claude-cli` (the `claude -p` CLI with a model alias, never a dated build) or
 an `argv` list for any command that reads a prompt on stdin and prints
 text. Set to `none`, distill is skipped and journals come only from
-`nimblemind store`; `learn` then drafts no principle text (section 15.5) and
+`nimblemind store`; `learn` then drafts no revision (section 15.5) and
 `research` refuses to run. `researcher.tools` (default
 `["WebSearch", "WebFetch"]`) names the tools a `claude-cli` researcher may
 use; an `argv` researcher ignores it.
 
 Outward API (the provider direction): `nimblemind.api` exposes `store`,
-`recall`, `delete`, `gaps_add`, `gaps_list` and `principles_list`, every
+`recall`, `delete`, `gaps_add`, `gaps_list` and `beliefs_list`, every
 write routed through section 6 on path `provider`. The CLI mirrors it with
 `--json`. A Hermes-style memory provider built on this API is the first
 external integration test, under `integrations/hermes/`; it is a test, not a
@@ -488,31 +489,37 @@ lowest confidence first) is replaced, not shipped. Two points from it stand:
    containing namespace B's identity string is refused.
 4. Session-start injection never exceeds `total_chars`, including label and
    truncation note, across a generated set of oversized journals and
-   principles.
+   beliefs.
 5. No path under `~/.claude/` is written by any test (asserted by running the
    suite with `HOME` pointed at a temp directory and checking it afterwards).
 6. The origin workspace's hooks run on the package with its project config
    and pass its own suite.
 7. A Hermes-style provider stub stores and recalls through `nimblemind.api`.
-8. Signals: a pitfall recurring in two stored journals produces exactly one
-   gap; a third recurrence merges into that gap and raises its priority
-   instead of adding a second; pending and held journals produce nothing.
-9. Ranking and stopping: a `not-holding` gap outranks a low-confidence
-   `manual` gap of default impact; a gap whose answers stay under
-   `confidence_floor` is parked after `max_attempts`; an answered gap is
-   `verified` after `verify_window` later journals without its signal and
-   reopens when the signal recurs.
-10. Principles: a lesson recurring across journals produces a principle in
-    `pending/` with its evidence ids; no hook injects it before approval; an
-    approved revision retires the principle it supersedes.
-11. Application: a journal whose `Principle checks` report `violated` for an
-    active principle produces a `not-holding` signal, and `principle
-    report` shows that principle's before and after counts.
-12. Prompt hook on the `local` backend injects matching principles and
-    records within `prompt_chars`, never repeats an id already injected in
-    the same session, and prints nothing when it fails.
-13. Session start injects active principles and the newest journal's
-    `core_sections`, not the whole journal, within `total_chars`.
+8. Evolution, end to end: a lesson seen once is a `hypothesis`; the same
+   lesson from independent sessions makes it `supported` and then
+   `established`; a session that was shown the belief and only repeats it
+   adds nothing. Sessions where it applied and the problem it addresses
+   happened anyway make it `challenged`; the drafted revision supersedes it
+   with narrower conditions, the old belief is `retired` with its history
+   kept, and the very next session-start block carries the revision, not
+   the old belief.
+9. A pinned belief (a person's) facing counter-evidence stays at least
+   `supported`, is never revised or retired by the loop, and raises a
+   `contradiction` gap instead.
+10. A belief marked stale by a `Changes` item is not trusted at session
+    start until new `for` evidence arrives.
+11. Signals and curiosity: a pitfall recurring in two journals makes one
+    gap and a third merges into it; a `contradiction` gap outranks a
+    low-confidence `manual` gap of default impact; a gap is parked after
+    `max_attempts` weak answers and reopens on new evidence; an answered
+    gap is `verified` after `verify_window` clean journals and `recurred`
+    when its signal returns; pending and held journals produce nothing.
+12. Prompt hook on the `local` backend injects matching beliefs and records
+    within `prompt_chars`, never repeats an id already injected in the same
+    session, and prints nothing when it fails.
+13. Session start injects applying beliefs and the newest journal's
+    `core_sections`, not the whole journal, within `total_chars`; no belief
+    write bypasses isolation, and `audit` covers every belief record.
 
 ## 13. Migration from the origin workspace
 
@@ -522,7 +529,7 @@ answers from an older layout (the origin's `~/.claude/brain/journals` and
 Imported files already passed that workspace's gate, so each gets an approval
 entry with `rule: "migrated"` and its hash, and the source is left in place
 for the person to delete. Quarantined and unscanned files import into `held/`.
-Imported journals carry no `Surprises` or `Principle checks` section; they
+Imported journals carry no `Surprises`, `Changes` or `Belief checks` section; they
 still feed the recurring and lesson signals, which read only the sections
 present.
 
@@ -539,198 +546,238 @@ present.
 
 ## 15. The learning loop
 
-Storing and finding is not learning. The loop this section specifies is:
-record, notice, ask, research, update what is believed, apply it, and check
-later whether applying it changed what happened. Every step is a rule this
-package runs, so "what to ask next" and "when to stop" are never delegated
-to a model or a retrieval framework (section 1). A model is used only to
-write text: a journal, a principle's wording, a research answer.
+Storing and finding is not learning, and neither is piling up rules. What
+this section specifies is knowledge that evolves: every session is evidence
+for or against what is already believed, a belief's confidence moves with
+that evidence, a counter-example narrows or replaces it, and the next
+session works from the corrected version. Curiosity is the part that turns
+uncertainty and contradiction into questions worth checking.
 
-### 15.1 Records
+Every decision here is a rule this package runs (what counts as evidence,
+what is independent, how confidence moves, when a belief is challenged or
+retired, what to ask next and when to stop), never a model's judgement or a
+retrieval framework's (section 1). A model only writes text: a journal, a
+belief's wording, a research answer.
 
-Two kinds join `journal`, `answer` and `note`: `principle` and `gap`, and
-one write path joins section 6's: `learn`, for principles. A principle
-proposed by `learn` or by research goes through isolation and approval like
-any other write; with the default `ask`, approving it is what makes it
-active. A person can grant `learn` with `approval allow learn`, which is
-their choice to let learned principles apply without review.
+Three limits hold everywhere in this section:
 
-A principle's content, parsed by its fixed labels:
+- Repetition is not support. The same claim copied into many journals, a
+  session restating a belief it was shown, and the model's own conclusions
+  do not prove a belief. Only independent sessions, real outcomes and
+  surviving counter-examples move confidence (section 15.3).
+- A person's word is not overruled by experience. A belief the person
+  stated (section 15.1, `pinned`) is never weakened, revised or retired by
+  the loop; evidence against it becomes a question for the person.
+- Confidence is not authority. A belief is context injected into a session.
+  Nothing reads a belief to decide approval, isolation, trust, budgets or
+  any other permission, so a better-supported belief never grants an agent
+  more than it had.
+
+### 15.1 Beliefs
+
+A belief is a record of kind `belief`, source id `belief:B-<8 hex>`:
 
 ```
-# Principle P-<8 hex>
-Statement: <one sentence, what to do or not do>
-Applies when: <the situation that triggers it>
+# Belief B-<8 hex>
+Statement: <one sentence: what holds, or what to do>
+Applies when: <the situation>
 Not when: <the exceptions, or "none">
 ```
 
-Its metadata: `evidence` (the source ids it was drawn from), `origin`
-(`lessons`, `rulings`, `research` or `manual`) and `supersedes` (the id of
-the principle it revises, or empty). Its source id is `principle:P-<8 hex>`.
+Its metadata: `origin` (`person`, `ruling`, `lessons`, `research` or
+`revision`), `supersedes` (the belief it revises, or empty) and `evidence`
+(the source ids it was first drawn from). A revision is a new record that
+supersedes the old one; the old one stays stored, retired, so the history of
+what was believed and why it changed is kept.
 
-A gap's content:
+`pinned` beliefs are the person's own: `origin` `person` (`nimblemind
+belief add`, path `cli`) or `ruling` (an item of a journal's
+`learn.ruling_sections`, which a person approved with its journal). The loop
+adds evidence to a pinned belief and reports it, but never lowers its status,
+revises or retires it.
+
+Beliefs are written on path `learn`, whose default level is automatic: a
+belief write passes the isolation check like every write (section 6), is
+logged in `approvals.jsonl` as `approved_by: "auto:learn"`, `rule: "auto"`,
+and so `audit` covers it. This is the one path whose default is not `ask`
+(section 7), because revising knowledge as evidence arrives is the point of
+the loop. A person who wants to review every belief sets `approval.learn =
+"ask"` (a tightening, so a project may set it too); `nimblemind approval
+revoke learn` is not needed and does nothing.
+
+### 15.2 Learning state
+
+What changes as evidence arrives lives in `<home>/learn/<ns>/state.json`,
+written atomically under the namespace's lock: each belief's evidence list
+(kind, the session it came from, the record it points at), its status and
+confidence, its transition history, each gap's lifecycle, and which journals
+were read. It holds ids, enumerated words, numbers and timestamps only, and
+loading refuses any other value: free text is a record, and a record goes
+through section 6. A state that fails to load is a reported error, never
+silently reset; `nimblemind learn --reset-state` rebuilds it by replaying
+every stored journal, belief and answer from the start.
+
+### 15.3 Evidence
+
+`learn` reads stored journals only, never `pending/` or `held/`, oldest
+first, each once. An item is one `- ` line of a section (not `- none`). Two
+texts are similar when their content tokens (the local backend's tokens,
+minus a fixed list of English stop words, minus non-CJK tokens under three
+characters) have a Jaccard index of at least `learn.similarity` (default
+0.35). A belief's signature is its statement and `Applies when`.
+
+A journal is evidence about a belief in these ways, at most one `for` and
+one `against` per journal and belief (the journal is the unit of
+independence: one session, one vote):
+
+| kind | direction | when |
+|---|---|---|
+| `restated` | for | an item of `learn.lesson_sections` is similar to the belief, and the belief was not listed to that session's distiller (a session that was shown the belief and repeats it is not independent) |
+| `outcome` | for | the session's `Belief checks` say `followed` and no pitfall or surprise of that session is similar to the belief |
+| `counter` | against | the belief was listed to the session (it applied) and a pitfall or surprise of that session is similar to it: it was in force and the problem it addresses happened anyway |
+| `research` | for or against | a research answer at or above `confidence_floor` for a gap about the belief: against when the answer revises it, for otherwise; one per gap |
+
+`violated` in `Belief checks` is not evidence about whether the belief is
+right. It means the belief was not applied, which raises the `not-holding`
+signal (section 15.6) instead.
+
+Confidence, with `s` the `for` count and `c` the `against` count:
+
+```
+confidence = (s + 1) / (s + 2c + 2)
+```
+
+A counter-example weighs twice a support: a belief has to survive its
+exceptions, not outnumber them.
+
+### 15.4 Status
+
+Recomputed after every piece of evidence, first match wins:
+
+| status | when | injected |
+|---|---|---|
+| `retired` | superseded, retired by a person, or (not pinned) `c >= 2` and confidence under 0.25 | never |
+| `stale` | marked for revalidation (section 15.5) and no `for` evidence since | as stale, at the prompt hook only |
+| `challenged` | (not pinned) the newest evidence is `against` and confidence is under 0.6 | yes, marked challenged, until revised |
+| `established` | `s >= 4` and confidence at least 0.8 | yes |
+| `supported` | `s >= 2` and confidence at least 0.6 | yes |
+| `hypothesis` | otherwise | revisions only; others at the prompt hook only |
+
+A pinned belief is at least `supported` whatever its evidence.
+
+Each status change is appended to the belief's history in the state with
+its time and the evidence that caused it; `nimblemind belief history <id>`
+prints the chain of versions and their transitions.
+
+A first observation becomes a hypothesis at once: an item of
+`learn.lesson_sections` that no existing belief covers becomes a new belief
+(`origin: lessons`, or `ruling` from a ruling section), with that journal as
+its first `restated` evidence. At most `learn.max_new` (default 5) per run,
+from the newest journals first, so a long imported history cannot flood the
+store at once; the rest are reconsidered on the next run.
+
+### 15.5 Revision and revalidation
+
+When a belief becomes `challenged`, the distiller drafts a revision from
+the belief and the items of its `against` evidence:
+
+```
+Statement: ...
+Applies when: <narrowed to where it held>
+Not when: <the situations of the counter-examples>
+```
+
+The revision is written on path `learn` as a new belief (`origin:
+revision`, `supersedes` the challenged one); the challenged belief is
+retired by it. A revision carries its predecessor's `for` evidence (what
+held still held, now under narrower conditions) and none of its `against`,
+and it is injected at session start marked as revised, so the next session
+works from the corrected version and its own outcome is the revision's
+first test. With `distiller.command = "none"` no revision is drafted: the
+belief stays `challenged` and a `contradiction` gap asks why.
+
+A journal item in `learn.change_sections` (default `Changes`: what changed
+in the environment, a version, a dependency or a requirement) similar to a
+belief marks it `stale`. So does `nimblemind belief stale <id>`. A stale
+belief needs one new `for` before it is trusted again.
+
+### 15.6 Gaps: what to ask next and when to stop
+
+A gap is a record of kind `gap` on path `gap` (default `ask`: the person
+sees what the loop wants to spend research on), source id `gap:G-<8 hex>`:
 
 ```
 # Gap G-<8 hex>
 Question: <the question>
-Signal: recurring | surprise | not-holding | manual
+Signal: recurring | surprise | not-holding | contradiction | manual
 ```
 
-Its metadata: `signal`, `evidence` (source ids) and, for a manual gap,
-`impact`, `cost` and `confidence`. Its source id is `gap:G-<8 hex>`.
-
-A person adds either by hand: `nimblemind principle add --statement ...
---applies-when ... [--not-when ...]` and `nimblemind gap add "<question>"
-[--impact 1-5] [--cost 1-5] [--confidence 0-100]`, both on path `cli`.
-
-### 15.2 Learning state
-
-What changes over a gap's or a principle's life (status, counts, attempts,
-which journals were already read) lives in
-`<home>/learn/<ns>/state.json`, written atomically under the namespace's
-lock. It holds ids, enumerated words, numbers and timestamps only, and
-loading refuses any other value: free text is a record, and a record goes
-through section 6. A state file that fails to load is a reported error,
-never silently reset; `nimblemind learn --reset-state` rebuilds it from the
-stored records (statuses back to `open`, counts recomputed).
-
-Gap statuses: `open`, `answered`, `parked`, `verified`, `recurred` (which
-behaves as `open` and records that verification failed once). Principle
-states: `active` (stored, not retired) and `retired` (superseded, or
-retired by a person with `nimblemind principle retire <id>`, which needs a
-terminal like every command that widens what an agent may do).
-
-### 15.3 Signals
-
-`learn` reads stored journals only, never `pending/` or `held/`. An item is
-one `- ` line of a section, except `- none`. Two items are similar when
-their content tokens (the local backend's tokens, minus a fixed list of
-English stop words, minus non-CJK tokens under three characters) have a
-Jaccard index of at least `learn.similarity` (default 0.35).
+Signals, each built from a fixed template, never by a model:
 
 | signal | fires when | weight |
 |---|---|---|
-| `recurring` | an item in `learn.pitfall_sections` (default `Pitfalls`) is similar to items in at least `learn.recur_min - 1` other journals (default `recur_min` 2) | 2 |
-| `surprise` | any item in `learn.surprise_sections` (default `Surprises`: where a result differed from what was expected) | 3 |
-| `not-holding` | a journal stored after a principle became active reports it `violated` (section 15.7), or carries a pitfall similar to the principle's statement and `Applies when` | 4 |
+| `contradiction` | a belief becomes `challenged`, or evidence goes against a pinned belief | 5 |
+| `not-holding` | a session reports a belief `violated` | 4 |
+| `surprise` | an item in `learn.surprise_sections` (default `Surprises`) | 3 |
+| `recurring` | a pitfall similar to pitfalls in at least `learn.recur_min - 1` other journals (default `recur_min` 2) | 2 |
 | `manual` | `nimblemind gap add` | the given impact, default 2 |
 
-A signal similar to an existing gap that is not `verified` (by its question
-item, or for `not-holding` the same principle id) merges into it: the
-journal is added to that gap's occurrences in the state, no new record is
-written. Otherwise a new gap is written on path `gap`, its question built
-from a fixed template, never by a model:
+A signal similar to an open gap (or, for the belief signals, about the same
+belief) merges into it instead of adding one. At most five new gaps per
+run, highest weight first.
 
-- recurring: `Why does this keep happening, and what would prevent it: <item>`
-- surprise: `What explains this result differing from what was expected: <item>`
-- not-holding: `Principle P-x exists but was not applied (<journal id>): what in the workflow lets it be skipped?`
-
-A new `recurring` gap's evidence is every journal the pitfall appears in, so
-it starts with its true occurrence count. One run writes at most five new
-gaps, the highest weighted first, so importing a long history cannot flood
-the approval queue; the rest are counted in the run's summary and come back
-if they recur.
-
-Each journal and item is read once: the state records which journal ids
-`learn` has consumed, so running it twice adds nothing.
-
-### 15.4 Ranking and stopping
-
-`research` takes `open` and `recurred` gaps, highest priority first, ties
-oldest first, up to `--max` (default 3), skipping any under
-`curiosity.min_priority` (default 1.0):
+`research` ranks `open` and `recurred` gaps:
 
 ```
-impact     = weight (section 15.3) * (1 + log2(occurrences))
-uncertainty = (100 - confidence) / 100          confidence: manual value, else 50,
-                                                 else the last answer's
-priority   = impact * (0.5 + uncertainty) / cost
+impact      = weight * (1 + log2(occurrences))
+uncertainty = (100 - confidence) / 100     confidence: manual value, else 50,
+                                           else the last answer's
+priority    = impact * (0.5 + uncertainty) / cost
 ```
 
 `cost` is the manual value, else `curiosity.cost.<signal>` (defaults:
-recurring 1, not-holding 1, surprise 2, manual 2), on 1 to 5. A question
-the agent's own history can answer is cheaper than one needing the web, and
-impact outweighs uncertainty: a very uncertain question nobody is blocked on
-ranks under a moderately certain one that keeps costing sessions.
+contradiction 1, not-holding 1, recurring 1, surprise 2, manual 2). Impact
+outweighs uncertainty: a very uncertain question nobody is blocked on ranks
+under a moderately certain one that keeps costing sessions. Research stops
+on an answer at or above `confidence_floor` (`answered`); under it the
+attempt counts, and at `max_attempts` the gap is `parked` until its signal
+recurs. An answered gap is `verified` once `verify_window` later journals
+pass without its signal, and `recurred` (open again) if the signal returns:
+verified means the problem stopped, not that an answer exists.
 
-Stopping: an answer with confidence at or above `curiosity.confidence_floor`
-(default 70) moves the gap to `answered`. Under it, the attempt counts; at
-`curiosity.max_attempts` (default 2) the gap is `parked`. A parked gap is
-researched again only once its signal recurs (new evidence, attempts reset).
-A research answer that is held or rejected counts as an attempt.
+A research answer is a record of kind `answer` on path `research` (default
+`ask`), tagged as untrusted evidence. Its `Belief` part, when present,
+becomes a belief (`origin: research`) or, naming a belief it revises, a
+revision; it also counts as `research` evidence (section 15.3).
 
-### 15.5 Learning (`nimblemind learn`)
+`curiosity.after_run` lets a trusted project run its own notification after
+`research`.
 
-One run, under the namespace's lock:
+### 15.7 Belief checks
 
-1. Signals to gaps (section 15.3).
-2. Lessons to principles. Items of `learn.lesson_sections` (default
-   `Lessons learned` and `Rulings`) are grouped by similarity. A group
-   qualifies when it spans at least `learn.recur_min` journals, or when any
-   item comes from `learn.ruling_sections` (default `Rulings`): a person's
-   ruling is enough once. A group similar to an active or pending
-   principle's statement and `Applies when` is not proposed again; its
-   journals are counted as that principle's reinforcement in the state.
-3. At most three qualifying groups per run, those spanning the most
-   journals first, become principles on path `learn`. Each group's items
-   are remembered by hash once proposed, so a rejected proposal is not
-   drafted again until a new item joins its group. The distiller
-   drafts its three lines from the group's items and from the active
-   principles it overlaps, and may name one it revises (`Revises: P-x`),
-   which becomes `supersedes`. With `distiller.command = "none"` the
-   newest item becomes the statement verbatim, `Applies when` and `Not
-   when` are `unspecified`. A draft missing a label, or naming a principle
-   that is not active, is refused and the group is tried again next run.
-4. Verification (section 15.8).
-
-When a principle with `supersedes` is stored, through any route including
-`pending approve`, the principle it supersedes is retired in the state.
-
-### 15.6 Applying
-
-Active principles reach the agent at session start (section 9) and in the
-prompt hook when the prompt matches them (section 10). The session-start
-order puts `not-holding` principles first: a rule that is known and not
-followed needs the reminder more than one that holds.
-
-### 15.7 Principle checks
-
-When principles are active, the distiller's instructions list them (id and
-statement, newest first, capped at `learn.check_chars`, default 1500) and
-the journal gains one more section:
+When beliefs apply (`supported`, `established`, `challenged`, revised, and
+pinned), the distiller's instructions list them (id and statement, capped
+at `learn.check_chars`, default 1500) and the journal gains:
 
 ```
-## Principle checks
-- P-1a2b3c4d: followed | violated | n/a: <evidence from the session>
+## Belief checks
+- B-1a2b3c4d: followed | violated | n/a: <evidence from the session>
 ```
 
-The section is required only when principles were listed. Lines naming an
-id that was not listed, or a verdict outside the three words, are dropped
-when parsed. The parsed result goes into the journal's metadata as
-`principle_checks` (`{id: verdict}`), so the approval that stores the
-journal covers it.
+The section is required only when beliefs were listed. Lines naming an id
+that was not listed, or another verdict, are dropped. The parsed result
+(`belief_checks`, `{id: verdict}`) and the list of ids shown
+(`beliefs_listed`) go into the journal's metadata, so the approval that
+stores the journal covers both.
 
-### 15.8 Verifying
+### 15.8 Applying
 
-`nimblemind principle report [--json]`, and step 4 of every `learn`, read
-each active principle against the journals stored after it became active
-(its approval entry's time):
-
-- `before`: how many journals its evidence spans; `after`: how many later
-  journals carry a pitfall similar to that evidence; `followed` and
-  `violated`: the principle-check counts after activation.
-- Verdict, first match wins: `not-holding` (any violation or recurrence
-  after activation, which also raises the signal of section 15.3);
-  `untested` (fewer than `curiosity.verify_window`, default 5, journals
-  since activation); `unused` (no `followed` or `violated` in the last
-  `learn.stale_after`, default 20, journals: a candidate for retiring, never
-  retired automatically); `holding`.
-
-An `answered` gap is `verified` once `verify_window` journals stored after
-its answer carry no item similar to its evidence, and becomes `recurred`
-(open again, its occurrences raised) when one does. Verified is the only
-status that means the loop closed: the problem stopped recurring after the
-answer, not only that an answer exists.
+Session start (section 9) injects applying beliefs, `challenged` and stale
+ones marked, then the newest journal's core sections. The prompt hook
+(section 10) adds beliefs whose signature shares `learn.match_min` content
+tokens with the prompt, hypotheses included and marked as such.
+`nimblemind belief report` lists every belief with status, confidence, `for`
+and `against` counts and its last transition.
 
 ### 15.9 What is left out, and why
 
@@ -739,7 +786,9 @@ answer, not only that an answer exists.
   remote store needs enforcement in the service, and a network write
   endpoint is a larger attack surface than the CLI whose review took the
   whole of v0.1.0. It ships when a second client does.
-- Contradiction is found by overlap plus the drafter's `Revises:` line,
-  never by an inference engine: a person approves every revision.
-- Nothing is forgotten automatically. `unused` principles and `parked` gaps
-  are reported; retiring and deleting stay a person's command.
+- Similarity is token overlap, not meaning. A contradiction worded with no
+  shared terms is not found; the cost is a missed signal, never a wrong
+  write, and a person can always add evidence by hand (`gap add`, `belief
+  add`, `belief stale`).
+- Nothing is deleted. Retired beliefs and parked gaps stay stored and
+  reported; deleting stays a person's command.
