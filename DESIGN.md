@@ -438,7 +438,10 @@ Harness hooks, chosen by `harness`:
   3. Nothing already injected into the same session (by session start or an
      earlier prompt) is injected again. The session's injected ids live in
      `<home>/run/sessions/<sha256 of the session id>.json`, ids only, and
-     every hook run removes such files older than seven days.
+     every hook run removes such files older than seven days. A session
+     known only by its transcript path (section 15.3) has what it was shown
+     recorded for learning, but is not deduplicated against: separate
+     sessions of a harness that reuses one transcript file would share it.
   4. Silent on any failure, as every hook is.
 
 Harness adapters translate payloads and transcripts: `claude-code` (hook JSON,
