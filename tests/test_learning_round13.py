@@ -1,5 +1,5 @@
 """Regression tests for v0.2.0 adversarial round 13: transcript-keyed sessions."""
-import io, json, os, sys
+import io, json, sys
 from nimblemind import cli, config as config_mod, distill, learn, recall, writes
 from test_learning import L1, L1b, put, one, jtext, no_model  # noqa
 
@@ -57,8 +57,9 @@ def test_r13_o1_records_shown_transcript_keyed(cfg, user_config, tmp_path, monke
     out = _prompt(monkeypatch, {"cwd": str(tmp_path), "transcript_path": str(tr),
                                 "prompt": "why do things fail on the first boot question answer"})
     assert ans in out and bid not in out
-    distill.distill(c, str(tr), "")
+    assert distill.distill(c, str(tr), "") == "stored"
     meta = learn.stored(c, "journal")[-1].metadata
+    assert ans in meta["records_shown"] and "shown_unknown" not in meta
     learn.run(c)
     assert one(c, "pin compose healthchecks with a start period")["for"] == 0
 

@@ -2,7 +2,7 @@
 import io, json, sys
 import pytest
 from conftest import toml_list
-from nimblemind import cli, config as config_mod, distill, learn, recall, research, writes
+from nimblemind import cli, config as config_mod, distill, learn, recall, research
 from test_learning import _gap, _hook, draft, jtext, one, no_model  # noqa: F401
 
 LESSON = "pin compose healthchecks with a start period for compose services"
@@ -43,8 +43,9 @@ def test_shown_answer_session_without_id(cfg, user_config, tmp_path, monkeypatch
     assert ans in out.getvalue()
     tr = tmp_path / "t.txt"
     tr.write_text("USER: a\nUSER: b\nUSER: c\nUSER: d\nUSER: e\n")
-    st = distill.distill(c, str(tr), sid or "unknown")
-    j = [r for r in learn.stored(c, "journal")][-1]
+    assert distill.distill(c, str(tr), sid or "unknown") == "stored"
+    meta = learn.stored(c, "journal")[-1].metadata
+    assert ("shown_unknown" in meta) == (sid is None)
     learn.run(c)
     assert one(c, "pin compose healthchecks with a start period")["for"] == 0
 

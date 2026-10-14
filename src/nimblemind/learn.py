@@ -514,7 +514,7 @@ class _World:
 
 
 def _belief_entry(w: _World, rec: Record, p: dict, done: dict[str, dict]) -> dict:
-    cfg, lr = w.cfg, w.lr
+    lr = w.lr
     th = lr["similarity"]
     sid, bid = rec.source_id, p["bid"]
     origin = _origin(rec)
@@ -653,7 +653,7 @@ def _gap_occurrences(w: _World, rec: Record, beliefs: dict[str, dict]) -> tuple[
 
 
 def _gap_entry(w: _World, rec: Record, p: dict, beliefs: dict[str, dict]) -> dict:
-    lr, cu = w.lr, w.cu
+    cu = w.cu
     meta = rec.metadata
     signal = meta.get("signal") if meta.get("signal") in WEIGHT else "manual"
     bel = meta.get("belief") if isinstance(meta.get("belief"), str) else ""

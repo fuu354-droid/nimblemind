@@ -3,7 +3,7 @@ cached state equals a fresh derivation after every run, the derivation does not
 depend on approval order, a pinned belief is never below supported, and session
 start stays within budget."""
 
-import json, random, time
+import json, random
 from datetime import datetime, timezone, timedelta
 import pytest
 from conftest import toml_list

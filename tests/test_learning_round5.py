@@ -3,7 +3,7 @@
 import time
 from datetime import datetime, timezone, timedelta
 from nimblemind import learn, writes, config as config_mod
-from test_learning import put, jtext, _person_belief, COUNTER, L1, L1b, L1c, report, one
+from test_learning import jtext, _person_belief, COUNTER
 
 def ts(base, sec):
     return (base + timedelta(seconds=sec)).isoformat()
@@ -57,6 +57,5 @@ def test_r5_contradiction_occurrences_depend_on_approval_order(first, cfg, user_
         learn.run(c)
     [g] = gaps_of(c, "contradiction")
     occ = learn.load_state(c)["gaps"][g.source_id]["occurrences"]
-    pits = [r for r in learn.stored(c, "gap")]
     assert sorted(occ) == ["journal:A", "journal:B"], occ
 
