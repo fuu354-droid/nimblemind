@@ -9,9 +9,11 @@ from nimblemind.backends.memila import MemilaBackend
 BIG = "9" * 401
 
 
-def test_f34_1_huge_integer_floor_in_an_untrusted_project_is_a_config_error(tmp_path, capsys):
-    (tmp_path / ".nimblemind.toml").write_text(f"[curiosity]\nconfidence_floor = {BIG}\n",
-                                               encoding="utf-8")
+def test_f34_1_huge_integer_floor_in_a_trusted_project_is_a_config_error(tmp_path, capsys):
+    # `curiosity` applies from a project only once trusted (v0.2.0).
+    f = tmp_path / ".nimblemind.toml"
+    f.write_text(f"[curiosity]\nconfidence_floor = {BIG}\n", encoding="utf-8")
+    config_mod.trust(f)
     with pytest.raises(config_mod.ConfigError, match="confidence_floor"):
         config_mod.load(tmp_path)
     assert cli.main(["config", "--cwd", str(tmp_path)]) == 2

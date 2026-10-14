@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nimblemind"
-version = "0.1.0"
+version = "0.2.0"
 description = "Session memory and a curiosity queue for AI coding agents, with zero-infrastructure local storage."
 readme = "README.md"
 license = "MIT"

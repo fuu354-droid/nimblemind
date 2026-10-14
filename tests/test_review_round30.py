@@ -9,16 +9,21 @@ from nimblemind import config as config_mod
                                   "[journal]\nmax_words = \"500\"\n", "[journal]\nmin_turns = 0\n",
                                   "[curiosity]\nconfidence_floor = nan\n",
                                   "[curiosity]\nconfidence_floor = 101\n"])
-def test_f30_1_non_finite_or_mistyped_values_are_config_errors(tmp_path, text):
-    (tmp_path / ".nimblemind.toml").write_text(text, encoding="utf-8")
+def test_f30_1_non_finite_or_mistyped_values_are_config_errors(tmp_path, user_config, text):
+    # `curiosity` needs trust in a project config since v0.2.0 (DESIGN.md
+    # section 4), so its values are checked from the user's own config.
+    if text.startswith("[curiosity]"):
+        user_config(text)
+    else:
+        (tmp_path / ".nimblemind.toml").write_text(text, encoding="utf-8")
     with pytest.raises(config_mod.ConfigError):
         config_mod.load(tmp_path)
 
 
-def test_f30_1_ordinary_values_load(tmp_path):
+def test_f30_1_ordinary_values_load(tmp_path, user_config):
+    user_config("[curiosity]\nconfidence_floor = 62.5\n")
     (tmp_path / ".nimblemind.toml").write_text(
-        "[journal]\nmax_words = 300\nmin_turns = 2\n[curiosity]\nconfidence_floor = 62.5\n",
-        encoding="utf-8")
+        "[journal]\nmax_words = 300\nmin_turns = 2\n", encoding="utf-8")
     c = config_mod.load(tmp_path)
     assert c["journal"]["max_words"] == 300 and c["curiosity"]["confidence_floor"] == 62.5
 

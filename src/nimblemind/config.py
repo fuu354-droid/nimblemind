@@ -38,7 +38,7 @@ from nimblemind.fsutil import atomic_write, read_text
 
 MAX_JOURNAL_NUMBER = 1_000_000  # words or turns; past it the value is a mistake
 MAX_TIMEOUT = 86400  # one day; past it a timeout is a mistake, and huge values overflow
-APPROVAL_PATHS = ("distill", "research", "gap", "provider", "cli")
+APPROVAL_PATHS = ("distill", "research", "gap", "provider", "cli", "learn")
 APPROVAL_LEVELS = ("deny", "ask", "allow")  # strictest first
 
 DEFAULTS: dict = {
@@ -46,30 +46,54 @@ DEFAULTS: dict = {
     "harness": "claude-code",
     "backend": {"name": "local"},
     "distiller": {"command": "claude-cli", "model": "haiku", "argv": [], "timeout": 300.0},
-    "researcher": {"command": "claude-cli", "model": "sonnet", "argv": [], "timeout": 900.0},
+    "researcher": {"command": "claude-cli", "model": "sonnet", "argv": [], "timeout": 900.0,
+                   "tools": ["WebSearch", "WebFetch"]},
     "journal": {
-        "sections": ["Decisions", "Rulings", "Pitfalls", "Unfinished",
+        "sections": ["Decisions", "Rulings", "Pitfalls", "Surprises", "Unfinished",
                      "Lessons learned", "Improvements found"],
         "recall_sections": ["Unfinished", "Pitfalls"],
+        "core_sections": ["Unfinished"],
         "max_words": 500,
         "min_turns": 3,
         "language": "",
         "banned_chars": [],
         "instructions": "",
     },
-    "budget": {"total_chars": 6000, "core_chars": 3500, "recall_chars": 2000,
-               "prompt_chars": 3000, "recall_k": 3},
+    "budget": {"total_chars": 6000, "principles_chars": 1200, "core_chars": 2500,
+               "recall_chars": 2000, "prompt_chars": 3000, "recall_k": 3, "prompt_k": 3,
+               "prompt_min_tokens": 3},
     "approval": {p: "ask" for p in APPROVAL_PATHS},
     "isolation": {"checks": ["builtin-secrets"], "deny": [], "identity": {},
                   "command": [], "project_command": [], "timeout": 60.0},
-    "curiosity": {"confidence_floor": 70.0, "gaps_file": "", "after_run": []},
+    "learn": {
+        "auto": True,
+        "similarity": 0.35,
+        "recur_min": 2,
+        "match_min": 2,
+        "pitfall_sections": ["Pitfalls"],
+        "surprise_sections": ["Surprises"],
+        "lesson_sections": ["Lessons learned", "Rulings"],
+        "ruling_sections": ["Rulings"],
+        "check_chars": 1500,
+        "stale_after": 20,
+    },
+    "curiosity": {
+        "confidence_floor": 70.0,
+        "min_priority": 1.0,
+        "max_attempts": 2,
+        "verify_window": 5,
+        "cost": {"recurring": 1, "not-holding": 1, "surprise": 2, "manual": 2},
+        "after_run": [],
+    },
 }
 
 # Keys a project config may set only once trusted. Dotted paths.
 TRUST_REQUIRED = (
     "namespace", "harness", "backend", "distiller", "researcher",
-    "isolation.command", "isolation.timeout", "curiosity.gaps_file",
-    "curiosity.after_run",
+    "isolation.command", "isolation.timeout",
+    # Whole sections: they decide when model calls run and what is proposed
+    # as a rule (DESIGN.md section 4).
+    "learn", "curiosity",
 )
 NARROWING = ("approval", "budget", "isolation")
 
@@ -274,16 +298,14 @@ def _validate(data: dict) -> None:
     for k in ("max_words", "min_turns"):
         if not _positive_int(j.get(k)) or j[k] > MAX_JOURNAL_NUMBER:
             raise ConfigError(f"journal.{k} must be a positive integer, at most {MAX_JOURNAL_NUMBER}")
-    for k in ("sections", "recall_sections", "banned_chars"):
+    for k in ("sections", "recall_sections", "core_sections", "banned_chars"):
         v = j.get(k)
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
             raise ConfigError(f"journal.{k} must be a list of strings")
     for k in ("language", "instructions"):
         if not isinstance(j.get(k), str):
             raise ConfigError(f"journal.{k} must be a string")
-    floor = data["curiosity"].get("confidence_floor")
-    if not _finite_number(floor) or not 0 <= floor <= 100:
-        raise ConfigError("curiosity.confidence_floor must be a number from 0 to 100")
+    _validate_learning(data)
     for p, level in data["approval"].items():
         if p not in APPROVAL_PATHS:
             raise ConfigError(f"approval.{p}: unknown write path; expected one of {APPROVAL_PATHS}")
@@ -302,6 +324,8 @@ def _validate(data: dict) -> None:
         raise ConfigError("budget.recall_chars cannot exceed budget.total_chars")
     if b["prompt_chars"] > b["total_chars"]:
         raise ConfigError("budget.prompt_chars cannot exceed budget.total_chars")
+    if b["principles_chars"] > b["total_chars"]:
+        raise ConfigError("budget.principles_chars cannot exceed budget.total_chars")
     if not isinstance(data["namespace"], str) or not data["namespace"]:
         raise ConfigError("namespace: must be a non-empty string")
     paths.safe_name(data["namespace"])
@@ -315,10 +339,60 @@ def _validate(data: dict) -> None:
         raise ConfigError("isolation.identity must map each namespace to a list of strings")
     for section in ("isolation", "distiller", "researcher"):
         _check_timeout(section, data[section].get("timeout"))
+    tools = data["researcher"].get("tools")
+    if not isinstance(tools, list) or not all(
+            isinstance(t, str) and t.replace("_", "").isalnum() for t in tools):
+        raise ConfigError("researcher.tools must be a list of tool names (letters, digits, _)")
     known = {"builtin-secrets", "builtin-patterns", "command"}
     for c in data["isolation"]["checks"]:
         if c not in known:
             raise ConfigError(f"isolation.checks: unknown check {c!r}; expected one of {sorted(known)}")
+
+
+SIGNALS = ("recurring", "surprise", "not-holding", "manual")
+
+
+def _strings(v) -> bool:
+    return isinstance(v, list) and all(isinstance(x, str) for x in v)
+
+
+def _validate_learning(data: dict) -> None:
+    """`learn` and `curiosity` (DESIGN.md section 15): every key known and
+    typed, every number finite and in range."""
+    lr, cu = data["learn"], data["curiosity"]
+    for section, table in (("learn", lr), ("curiosity", cu)):
+        if not isinstance(table, dict):
+            raise ConfigError(f"{section} must be a table")
+        unknown = set(table) - set(DEFAULTS[section])
+        if unknown:
+            raise ConfigError(f"{section} has unknown keys: {', '.join(sorted(unknown))}")
+    if not isinstance(lr.get("auto"), bool):
+        raise ConfigError("learn.auto must be true or false")
+    sim = lr.get("similarity")
+    if not _finite_number(sim) or not 0 < sim <= 1:
+        raise ConfigError("learn.similarity must be a number above 0, at most 1")
+    for k in ("recur_min", "match_min", "check_chars", "stale_after"):
+        if not _positive_int(lr.get(k)) or lr[k] > MAX_JOURNAL_NUMBER:
+            raise ConfigError(f"learn.{k} must be a positive integer, at most {MAX_JOURNAL_NUMBER}")
+    for k in ("pitfall_sections", "surprise_sections", "lesson_sections", "ruling_sections"):
+        if not _strings(lr.get(k)):
+            raise ConfigError(f"learn.{k} must be a list of strings")
+    floor = cu.get("confidence_floor")
+    if not _finite_number(floor) or not 0 <= floor <= 100:
+        raise ConfigError("curiosity.confidence_floor must be a number from 0 to 100")
+    mp = cu.get("min_priority")
+    if not _finite_number(mp) or not 0 <= mp <= 1000:
+        raise ConfigError("curiosity.min_priority must be a number from 0 to 1000")
+    for k in ("max_attempts", "verify_window"):
+        if not _positive_int(cu.get(k)) or cu[k] > MAX_JOURNAL_NUMBER:
+            raise ConfigError(f"curiosity.{k} must be a positive integer, at most {MAX_JOURNAL_NUMBER}")
+    cost = cu.get("cost")
+    if not isinstance(cost, dict) or set(cost) - set(SIGNALS) or not all(
+            _positive_int(v) and v <= 5 for v in cost.values()):
+        raise ConfigError(f"curiosity.cost must map signals {SIGNALS} to integers 1 to 5")
+    cu["cost"] = {**DEFAULTS["curiosity"]["cost"], **cost}
+    if not _strings(cu.get("after_run")):
+        raise ConfigError("curiosity.after_run must be a list of strings")
 
 
 # ---- approval grants -----------------------------------------------------
@@ -472,7 +546,10 @@ def load(cwd: Path | str | None = None) -> Config:
     # The narrowing sections' environment values act at the user's level, so
     # a project can still only narrow them; every other key's environment
     # value sits above the project config (section 4's precedence).
-    data = _merge(data, _env_layer(DEFAULTS, NARROWING))
+    env_narrowing = _env_layer(DEFAULTS, NARROWING)
+    data = _merge(data, env_narrowing)
+    # Budget parts somebody actually set; the rest are defaults (section 9).
+    budget_set = set(user.get("budget") or {}) | set(env_narrowing.get("budget") or {})
 
     try:
         project_file = paths.find_project_config(cwd)
@@ -503,6 +580,8 @@ def load(cwd: Path | str | None = None) -> Config:
         if tables:
             raise ConfigError(f"{project_file}: {', '.join(tables)} must be a table")
         narrowing = {k: project.pop(k) for k in NARROWING if k in project}
+        if isinstance(narrowing.get("budget"), dict):
+            budget_set |= set(narrowing["budget"])
         for p, level in (narrowing.get("approval") or {}).items():
             if level == "allow":
                 notes.append(f"{project_file}: approval.{p} = \"allow\" ignored; a project "
@@ -546,9 +625,11 @@ def load(cwd: Path | str | None = None) -> Config:
     # A project may lower total_chars alone; the parts it bounds follow it
     # down rather than turning an authorized narrowing into a config error.
     b = data["budget"]
-    if project_lowered_total:
-        for k in ("core_chars", "recall_chars", "prompt_chars"):
-            if isinstance(b.get(k), int) and isinstance(b.get("total_chars"), int):
-                b[k] = min(b[k], b["total_chars"])
+    # A part nobody set is a default, and a default never makes a lowered
+    # total an error: it follows the total down too.
+    for k in ("core_chars", "recall_chars", "prompt_chars", "principles_chars"):
+        if (project_lowered_total or k not in budget_set) \
+                and isinstance(b.get(k), int) and isinstance(b.get("total_chars"), int):
+            b[k] = min(b[k], b["total_chars"])
     _validate(data)
     return Config(data=data, project_file=project_file, project_trusted=trusted, notes=notes)

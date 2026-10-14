@@ -36,7 +36,7 @@ def test_f4_3_journal_with_empty_recall_sections_adds_nothing(cfg, user_config):
                            for s in sections)
     writes.write(c, "cli", "journal", older_body, source_id="session:old")
     writes.write(c, "cli", "note", "a plain unfinished note", source_id="note:1")
-    out = recall.older(c, "session:new", 3)
+    out = [snippet for _, snippet in recall.older(c, "session:new", 3)]
     assert not any("decisions ONLY" in o for o in out)
     assert any("plain unfinished note" in o for o in out)
 

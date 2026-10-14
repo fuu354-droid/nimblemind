@@ -25,7 +25,7 @@ from nimblemind import backends as backends_mod
 from nimblemind.backends.local import LocalBackend
 from nimblemind.config import APPROVAL_PATHS
 from nimblemind.fsutil import append_line, atomic_write, file_lock, list_json, path_kind, read_text
-from nimblemind.records import Record, now_iso, sha256
+from nimblemind.records import Record, now_iso
 
 STORED, PENDING, HELD, REJECTED = "stored", "pending", "held", "rejected"
 

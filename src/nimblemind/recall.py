@@ -1,22 +1,36 @@
-"""Session start: one labeled block, inside one budget (DESIGN.md section 9).
+"""Injection: the session-start block and the per-prompt block, each inside
+its budget (DESIGN.md sections 9 and 10).
 
-Assembled in this order and counted together against `budget.total_chars`:
-the source label, core memory (the newest stored journal, capped at
+Session start, counted together against `budget.total_chars`: the source
+label, active principles (whole items, capped at `principles_chars`), core
+memory (the newest stored journal's `core_sections`, capped at
 `core_chars`), recall (older records' recall sections, capped at
-`recall_chars`), and a truncation note whenever anything was cut. When the
-label and core alone exceed the total, recall is dropped first and core is
-cut next. Every cut is named in the note; nothing is trimmed silently.
+`recall_chars`), and a truncation note whenever anything was cut. Over the
+total, recall is dropped first, core is cut next, principles are cut last.
+Every cut is named in the note; nothing is trimmed silently.
 
-Fail-open: any error means nothing is injected, and session start is never
+Fail-open: any error means nothing is injected, and no session is ever
 blocked. Fail-open never reaches the write side: recall only ever reads
 stored records, never `pending/` or `held/`.
 """
 
 from __future__ import annotations
 
-from nimblemind import journal, writes
+import hashlib
+import json
+import os
+import time
+
+from nimblemind import journal, learn, writes
+from nimblemind.fsutil import atomic_write, read_text
+from nimblemind.paths import data_home
 
 RECALL_QUERY = "unfinished work next steps blockers decisions pitfalls"
+SESSION_TTL = 7 * 86400
+MAX_QUERY_CHARS = 2000
+# Records the prompt hook never shows as recall: principles have their own
+# part, and a gap is a question, not memory.
+NOT_RECALLED = ("principle:", "gap:")
 
 
 def _cut(text: str, limit: int) -> tuple[str, bool]:
@@ -25,6 +39,18 @@ def _cut(text: str, limit: int) -> tuple[str, bool]:
     if len(text) <= limit:
         return text, False
     return text[:limit].rstrip(), True
+
+
+def _cut_items(lines: list[str], limit: int) -> tuple[list[str], bool]:
+    """Whole items from the front while they fit."""
+    out, used = [], 0
+    for line in lines:
+        extra = len(line) + (1 if out else 0)
+        if used + extra > limit:
+            return out, True
+        out.append(line)
+        used += extra
+    return out, False
 
 
 def label(cfg) -> str:
@@ -39,70 +65,239 @@ def latest_journal(cfg):
     return None
 
 
-def older(cfg, exclude: str, k: int) -> list[str]:
-    """Up to k recall snippets, never the journal already shown in full."""
+def core_view(cfg, rec) -> str:
+    """What session start shows of the newest journal: its `core_sections`,
+    or all of it when that list is empty."""
+    sections = cfg["journal"]["core_sections"]
+    if not sections:
+        return rec.content.strip()
+    parts = []
+    for name in sections:
+        body = journal.section(rec.content, name)
+        if body and body != journal.EMPTY:
+            parts.append(f"{name}:\n{body}")
+    return "\n".join(parts)
+
+
+def principle_line(p: dict, verdict: str = "") -> str:
+    mark = " [not holding: known and not followed]" if verdict == "not-holding" else ""
+    when = p.get("applies_when") or "unspecified"
+    nw = p.get("not_when") or "none"
+    return f"- {p['pid']}{mark}: {p['statement']} (applies when: {when}; not when: {nw})"
+
+
+def _verdicts(state: dict) -> dict[str, str]:
+    return {sid: (e or {}).get("verdict", "") for sid, e in state["principles"].items()}
+
+
+def principle_lines(cfg) -> list[tuple[str, str]]:
+    """(source id, line) for active principles, not-holding first, then
+    newest first."""
+    state = learn.load_state(cfg)
+    active = learn.active_principles(cfg, state)
+    verdict = _verdicts(state)
+    ordered = sorted(enumerate(active),
+                     key=lambda x: (verdict.get(x[1][0].source_id) != "not-holding", x[0]))
+    return [(r.source_id, principle_line(p, verdict.get(r.source_id, ""))) for _, (r, p) in ordered]
+
+
+def _view(cfg, ev) -> str:
+    view = journal.recall_view(cfg, ev.content)
+    if not view:
+        if journal.is_journal(cfg, ev.content):
+            return ""  # a journal whose recall sections are all empty adds nothing
+        view = ev.content  # a note or an answer has no sections: shown as is
+    return f"[{ev.source_id[:100]}] {view.strip()}"
+
+
+def older(cfg, exclude: str, k: int) -> list[tuple[str, str]]:
+    """Up to k (source id, snippet), never the journal already shown as
+    core, never a principle or a gap."""
     if k <= 0:
         return []
-    # A backend failure propagates: section 9's fail-open means nothing is
-    # injected at all, not core memory without its recall.
-    hits = writes.recall_backend(cfg).recall(RECALL_QUERY, cfg.namespace, k + 1)
+    # A backend failure propagates: fail-open means nothing is injected at
+    # all, not core memory without its recall.
+    hits = writes.recall_backend(cfg).recall(RECALL_QUERY, cfg.namespace, k + 9)
     out = []
     for ev in hits:
-        if ev.source_id == exclude:
+        if ev.source_id == exclude or ev.source_id.startswith(NOT_RECALLED):
             continue
-        view = journal.recall_view(cfg, ev.content)
-        if not view:
-            if journal.is_journal(cfg, ev.content):
-                continue  # a journal whose recall sections are all empty adds nothing
-            view = ev.content  # a note or an answer has no sections: shown as is
-        out.append(f"[{ev.source_id[:100]}] {view.strip()}")
+        v = _view(cfg, ev)
+        if v:
+            out.append((ev.source_id, v))
         if len(out) >= k:
             break
     return out
 
 
-def assemble(cfg) -> str:
-    """The block to inject, or "" when there is nothing to say."""
+def _render(head: str, parts: list[tuple[str, str]], notes: list[str]) -> str:
+    out = [head] + [f"{title}:\n{body}" for title, body in parts if body]
+    if notes:
+        out.append("[nimblemind: " + "; ".join(notes) + "]")
+    return "\n\n".join(out)
+
+
+def assemble_with_ids(cfg) -> tuple[str, list[str]]:
+    """The session-start block and the ids it shows, or ("", [])."""
     b = cfg["budget"]
     core_rec = latest_journal(cfg)
+    prin = principle_lines(cfg)
     snippets = older(cfg, core_rec.source_id if core_rec else "", b["recall_k"])
-    if not core_rec and not snippets:
-        return ""
+    core_full = core_view(cfg, core_rec) if core_rec else ""
+    if not core_full and not snippets and not prin:
+        return "", []
 
     head = label(cfg)
     notes: list[str] = []
-    core, core_cut = _cut(core_rec.content.strip(), b["core_chars"]) if core_rec else ("", False)
+    p_lines, p_cut = _cut_items([line for _, line in prin], b["principles_chars"])
+    if p_cut:
+        notes.append(f"principles cut to {b['principles_chars']} chars")
+    core, core_cut = _cut(core_full, b["core_chars"])
     if core_cut:
         notes.append(f"core memory cut to {b['core_chars']} chars")
-    recall_text, recall_cut = _cut("\n---\n".join(snippets), b["recall_chars"])
+    recall_text, recall_cut = _cut("\n---\n".join(s for _, s in snippets), b["recall_chars"])
     if recall_cut:
         notes.append(f"recall cut to {b['recall_chars']} chars")
 
-    def render(core: str, recall_text: str, notes: list[str]) -> str:
-        parts = [head]
-        if core:
-            parts.append("Last session journal:\n" + core)
-        if recall_text:
-            parts.append("Earlier sessions:\n" + recall_text)
-        if notes:
-            parts.append("[nimblemind: " + "; ".join(notes) + "]")
-        return "\n\n".join(parts)
+    def render():
+        return _render(head, [("Principles", "\n".join(p_lines)),
+                              ("Last session", core), ("Earlier sessions", recall_text)], notes)
 
     total = b["total_chars"]
-    out = render(core, recall_text, notes)
-    if len(out) > total and recall_text:
+    if len(render()) > total and recall_text:
         notes = [n for n in notes if not n.startswith("recall")] + ["recall dropped to fit the total budget"]
         recall_text = ""
-        out = render(core, recall_text, notes)
-    if len(out) > total and core:
-        # Cut core by exactly the overflow, plus room for the note it adds.
-        note = f"core memory cut to fit the total budget of {total} chars"
-        notes = [n for n in notes if not n.startswith("core")] + [note]
-        overflow = len(render(core, "", notes)) - total
-        core, _ = _cut(core, len(core) - overflow)
-        out = render(core, "", notes)
-    if len(out) > total:
-        # Label and notes alone do not fit; inject nothing rather than break
-        # the budget.
-        return ""
-    return out
+    if len(render()) > total and core:
+        notes = [n for n in notes if not n.startswith("core")] + \
+            [f"core memory cut to fit the total budget of {total} chars"]
+        keep = len(core) - (len(render()) - total)
+        core = _cut(core, keep)[0] if keep > 0 else ""
+    if len(render()) > total and p_lines:
+        notes = [n for n in notes if not n.startswith("principles")] + \
+            [f"principles cut to fit the total budget of {total} chars"]
+        while p_lines and len(render()) > total:
+            p_lines = p_lines[:-1]
+    out = render()
+    if len(out) > total or (not p_lines and not core and not recall_text):
+        # Label and notes alone do not fit, or nothing is left to say:
+        # inject nothing rather than break the budget or send only a label.
+        return "", []
+    ids = [sid for sid, line in prin if line in p_lines]
+    if core and core_rec:
+        ids.append(core_rec.source_id)
+    if recall_text:
+        ids += [sid for sid, _ in snippets]
+    return out, ids
+
+
+def assemble(cfg) -> str:
+    """The block to inject, or "" when there is nothing to say."""
+    return assemble_with_ids(cfg)[0]
+
+
+# ---- per prompt ----------------------------------------------------------
+
+def _session_file(session_id: str):
+    h = hashlib.sha256(session_id.encode("utf-8", "surrogatepass")).hexdigest()
+    return data_home() / "run" / "sessions" / f"{h}.json"
+
+
+def injected(session_id: str) -> set[str]:
+    """The ids this session has already been shown."""
+    if not session_id:
+        return set()
+    try:
+        data = json.loads(read_text(_session_file(session_id)))
+    except (OSError, ValueError):
+        return set()
+    ids = data.get("ids") if isinstance(data, dict) else None
+    return {i for i in ids if isinstance(i, str)} if isinstance(ids, list) else set()
+
+
+def remember(session_id: str, ids: list[str]) -> None:
+    """Add `ids` to what this session has seen, and drop other sessions'
+    files older than a week."""
+    if not session_id or not ids:
+        return
+    f = _session_file(session_id)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    for other in f.parent.glob("*.json"):
+        try:
+            if other != f and now - other.stat().st_mtime > SESSION_TTL:
+                other.unlink()
+        except OSError:
+            pass
+    seen = injected(session_id) | set(ids)
+    atomic_write(f, json.dumps({"ids": sorted(seen)}) + "\n")
+    try:
+        os.chmod(f, 0o600)
+    except OSError:
+        pass
+
+
+def prompt_block(cfg, prompt: str, session_id: str = "") -> tuple[str, list[str]]:
+    """The per-prompt block (section 10) and the ids it shows."""
+    b, lr = cfg["budget"], cfg["learn"]
+    q = learn.content_tokens(prompt)
+    if len(q) < b["prompt_min_tokens"]:
+        return "", []
+    seen = injected(session_id)
+    state = learn.load_state(cfg)
+    verdict = _verdicts(state)
+    prin = []
+    for rec, p in learn.active_principles(cfg, state):
+        if rec.source_id in seen:
+            continue
+        if len(q & learn.principle_signature(p)) >= lr["match_min"]:
+            prin.append((rec.source_id, principle_line(p, verdict.get(rec.source_id, ""))))
+    hits = []
+    if b["prompt_k"] > 0:
+        local = cfg["backend"].get("name", "local") == "local"
+        # The local backend matches tokens, so it is asked with the prompt's
+        # content tokens and must share `match_min` of them; any other
+        # backend ranks the prompt text itself.
+        query = " ".join(sorted(q)) if local else prompt[:MAX_QUERY_CHARS]
+        for ev in writes.recall_backend(cfg).recall(query, cfg.namespace, b["prompt_k"] + len(seen) + 8):
+            if ev.source_id in seen or ev.source_id.startswith(NOT_RECALLED):
+                continue
+            if local and (ev.scores or {}).get("overlap", 0) < lr["match_min"]:
+                continue
+            v = _view(cfg, ev)
+            if v:
+                hits.append((ev.source_id, v))
+            if len(hits) >= b["prompt_k"]:
+                break
+    if not prin and not hits:
+        return "", []
+    head = f"[nimblemind {cfg.namespace} prompt]"
+    limit = b["prompt_chars"]
+    notes: list[str] = []
+    p_lines = [line for _, line in prin]
+    shown = list(hits)
+
+    def render():
+        return _render(head, [("Principles that apply", "\n".join(p_lines)),
+                              ("Related memory", "\n---\n".join(s for _, s in shown))], notes)
+
+    # Related memory goes first, whole items from the end, then principles.
+    if len(render()) > limit and shown:
+        notes.append(f"related memory cut to fit {limit} chars")
+        first = shown[0]
+        while shown and len(render()) > limit:
+            shown = shown[:-1]
+        if not shown:
+            # Not even one whole item fits: the best match, cut to the room
+            # left, rather than nothing.
+            shown = [(first[0], "")]
+            room = limit - len(render()) - len("Related memory:\n") - 2
+            shown = [(first[0], _cut(first[1], room)[0])] if room > 40 else []
+    if len(render()) > limit and p_lines:
+        notes.append(f"principles cut to fit {limit} chars")
+        while p_lines and len(render()) > limit:
+            p_lines = p_lines[:-1]
+    out = render()
+    if len(out) > limit or (not p_lines and not shown):
+        return "", []
+    ids = [sid for sid, line in prin if line in p_lines] + [sid for sid, _ in shown]
+    return out, ids

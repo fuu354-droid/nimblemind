@@ -398,8 +398,9 @@ counted together against `budget.total_chars`:
 Each cap is a hard cut with a note, never a silent trim. Over the total,
 recall is dropped first, core is cut next, principles are cut last (whole
 items, from the end). The per-prompt hook (section 10) has its own
-`prompt_chars` cap. No single cap may be set above `total_chars`, and config
-validation refuses that.
+`prompt_chars` cap. No cap a person sets may be above `total_chars`, and
+config validation refuses that; a cap left at its default follows a lowered
+total down instead.
 
 Why core is no longer the whole newest journal: recency is not relevance.
 The newest journal's decisions and pitfalls are about whatever that session
@@ -421,10 +422,16 @@ Harness hooks, chosen by `harness`:
   1. A prompt with fewer than `budget.prompt_min_tokens` (default 3)
      distinct tokens injects nothing.
   2. Principles whose statement and `Applies when` share at least
-     `learn.match_min` (default 2) distinct tokens with the prompt come
-     first, then up to `budget.prompt_k` recalled records of any other
-     kind, all under `[nimblemind <namespace> prompt]` and capped at
-     `budget.prompt_chars` with the same cut-and-note rule as section 9.
+     `learn.match_min` (default 2) distinct content tokens (section 15.3)
+     with the prompt come first, then up to `budget.prompt_k` recalled
+     records that are neither principles nor gaps, all under
+     `[nimblemind <namespace> prompt]` and capped at `budget.prompt_chars`.
+     The `local` backend is queried with the prompt's content tokens and a
+     record must share `match_min` of them; any other backend is given the
+     prompt text (its first 2000 characters) and ranks it itself. Over the
+     cap, related records are dropped whole from the end, then principles;
+     when not even one record fits whole, the best match is cut to the room
+     left. Every cut is named in a note.
   3. Nothing already injected into the same session (by session start or an
      earlier prompt) is injected again. The session's injected ids live in
      `<home>/run/sessions/<sha256 of the session id>.json`, ids only, and
@@ -460,7 +467,9 @@ lowest confidence first) is replaced, not shipped. Two points from it stand:
 
 - Commit, push and notification steps are not in the package. A
   `curiosity.after_run` argv hook lets a project run its own after
-  `nimblemind research` (trusted projects only, section 4).
+  `nimblemind research` (trusted projects only, section 4). It runs with no
+  shell, its executable resolved like a model command's, in the trusted
+  project's directory, under the researcher's timeout.
 - `curiosity.gaps_file` is withdrawn: gap questions are records and go
   through the write path like every other record, and their lifecycle lives
   in the data home (section 15.2). A project that wants the queue in its
@@ -497,7 +506,7 @@ lowest confidence first) is replaced, not shipped. Two points from it stand:
     `pending/` with its evidence ids; no hook injects it before approval; an
     approved revision retires the principle it supersedes.
 11. Application: a journal whose `Principle checks` report `violated` for an
-    active principle produces a `not-holding` signal, and `principles
+    active principle produces a `not-holding` signal, and `principle
     report` shows that principle's before and after counts.
 12. Prompt hook on the `local` backend injects matching principles and
     records within `prompt_chars`, never repeats an id already injected in
@@ -603,7 +612,7 @@ Jaccard index of at least `learn.similarity` (default 0.35).
 |---|---|---|
 | `recurring` | an item in `learn.pitfall_sections` (default `Pitfalls`) is similar to items in at least `learn.recur_min - 1` other journals (default `recur_min` 2) | 2 |
 | `surprise` | any item in `learn.surprise_sections` (default `Surprises`: where a result differed from what was expected) | 3 |
-| `not-holding` | a journal stored after a principle became active reports it `violated` (section 15.7), or a pitfall similar to the principle's evidence recurs after activation | 4 |
+| `not-holding` | a journal stored after a principle became active reports it `violated` (section 15.7), or carries a pitfall similar to the principle's statement and `Applies when` | 4 |
 | `manual` | `nimblemind gap add` | the given impact, default 2 |
 
 A signal similar to an existing gap that is not `verified` (by its question
@@ -615,6 +624,12 @@ from a fixed template, never by a model:
 - recurring: `Why does this keep happening, and what would prevent it: <item>`
 - surprise: `What explains this result differing from what was expected: <item>`
 - not-holding: `Principle P-x exists but was not applied (<journal id>): what in the workflow lets it be skipped?`
+
+A new `recurring` gap's evidence is every journal the pitfall appears in, so
+it starts with its true occurrence count. One run writes at most five new
+gaps, the highest weighted first, so importing a long history cannot flood
+the approval queue; the rest are counted in the run's summary and come back
+if they recur.
 
 Each journal and item is read once: the state records which journal ids
 `learn` has consumed, so running it twice adds nothing.
@@ -656,7 +671,10 @@ One run, under the namespace's lock:
    ruling is enough once. A group similar to an active or pending
    principle's statement and `Applies when` is not proposed again; its
    journals are counted as that principle's reinforcement in the state.
-3. A qualifying group becomes a principle on path `learn`. The distiller
+3. At most three qualifying groups per run, those spanning the most
+   journals first, become principles on path `learn`. Each group's items
+   are remembered by hash once proposed, so a rejected proposal is not
+   drafted again until a new item joins its group. The distiller
    drafts its three lines from the group's items and from the active
    principles it overlaps, and may name one it revises (`Revises: P-x`),
    which becomes `supersedes`. With `distiller.command = "none"` the
@@ -694,7 +712,7 @@ journal covers it.
 
 ### 15.8 Verifying
 
-`nimblemind principles report [--json]`, and step 4 of every `learn`, read
+`nimblemind principle report [--json]`, and step 4 of every `learn`, read
 each active principle against the journals stored after it became active
 (its approval entry's time):
 

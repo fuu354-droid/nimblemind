@@ -173,11 +173,18 @@ def cmd_hook(args) -> int:
             payload = h.read_payload(raw)
             cfg = config_mod.load(_hook_cwd(payload))
         cfg.data["harness"] = h.name
-        if args.event == "session-start":
-            block = recall.assemble(cfg)
+        if args.event in ("session-start", "prompt"):
+            sid = payload.get("session_id", "")
+            if args.event == "session-start":
+                block, ids = recall.assemble_with_ids(cfg)
+                render = h.session_start_output
+            else:
+                block, ids = recall.prompt_block(cfg, payload.get("prompt", ""), sid)
+                render = h.prompt_output
             if block:
+                recall.remember(sid, ids)
                 try:
-                    print(h.session_start_output(block))
+                    print(render(block))
                     sys.stdout.flush()  # here, not at exit: a full or closed stdout is caught
                 except (OSError, ValueError):
                     # What is still buffered would fail again at interpreter
@@ -211,6 +218,14 @@ def cmd_distill(args) -> int:
     except Exception as e:
         distill._log(cfg, f"error {args.session_id}: {type(e).__name__}: {e}")
         return 1
+    if cfg["learn"]["auto"]:
+        from nimblemind import learn
+
+        try:
+            learn.run(cfg)
+        except Exception as e:  # the journal is already handled; learning retries next time
+            distill._log(cfg, f"learn error: {type(e).__name__}: {e}")
+            return 1
     return 0
 
 
@@ -243,7 +258,6 @@ def cmd_store(args) -> int:
 
 def cmd_recall(args) -> int:
     from nimblemind import writes
-    from nimblemind.backends import BackendError
 
     cfg = _cfg(args)
     try:
@@ -456,6 +470,137 @@ def cmd_trust(args) -> int:
     return 0
 
 
+# ---- learning ------------------------------------------------------------
+
+def cmd_learn(args) -> int:
+    from nimblemind import learn
+
+    cfg = _cfg(args)
+    try:
+        summary = learn.run(cfg, reset_state=args.reset_state)
+    except learn.StateError as e:
+        raise SystemExit(f"learn: {e}") from None
+    _out(args, summary, " ".join(f"{k}={v}" for k, v in summary.items()))
+    return 0
+
+
+def cmd_research(args) -> int:
+    from nimblemind import learn, model, research
+
+    cfg = _cfg(args)
+    try:
+        out = research.run(cfg, args.max)
+    except (model.ModelError, learn.StateError) as e:
+        raise SystemExit(f"research: {e}") from None
+    lines = [f"{r['gap']}: {r.get('status', '?')} (confidence {r['confidence']}) {r['answer']}"
+             + (f"; principle {r['principle']}" if r.get("principle") else "")
+             for r in out["results"]]
+    if out["state"] == "busy":
+        lines = ["another research run holds the lock"]
+    if out.get("after_run"):
+        lines.append(out["after_run"])
+    _out(args, out, "\n".join(lines) or "(nothing ready to research)")
+    return 0 if out["state"] == "ok" else 1
+
+
+def _approver(args, label: str):
+    if not getattr(args, "approve", False):
+        return None
+
+    def ask(rec):
+        say(f"== path cli  kind {rec.kind}  {rec.source_id}  sha256 {rec.digest[:12]}\n{rec.content}")
+        return confirm(f"Store this {label} in namespace {rec.namespace!r}?")
+    return ask
+
+
+def cmd_gap(args) -> int:
+    from nimblemind import learn, research, writes
+
+    cfg = _cfg(args)
+    if args.action == "list":
+        try:
+            items = research.ranked(cfg)
+        except learn.StateError as e:
+            raise SystemExit(f"gap list: {e}") from None
+        if not args.all:
+            items = [i for i in items if i["status"] != "verified"]
+        waiting = [e for e in writes.pending(cfg) if (e.get("record") or {}).get("kind") == "gap"]
+        rows = [{k: v for k, v in i.items() if k != "_rec"} for i in items]
+        _out(args, {"gaps": rows, "pending": [e["record"]["source_id"] for e in waiting]},
+             "\n".join(f"{i['priority']:>7.2f}  {i['status']:<9} {i['signal']:<11} "
+                       f"{i['source_id']}  {i['question']}" for i in rows)
+             + (f"\n{len(waiting)} gap(s) awaiting approval (nimblemind pending list)" if waiting else "")
+             or "(no gaps)")
+        return 0
+    if not args.question or not args.question.strip():
+        raise SystemExit("gap add needs a question")
+    for name, lo, hi in (("impact", 1, 5), ("cost", 1, 5), ("confidence", 0, 100)):
+        v = getattr(args, name)
+        if v is not None and not lo <= v <= hi:
+            raise SystemExit(f"--{name} must be from {lo} to {hi}")
+    taken = {r.source_id.removeprefix("gap:") for r, _ in learn.known_gaps(cfg)}
+    gid = learn.new_id("G", taken)
+    meta = {"signal": "manual", "evidence": []}
+    for name in ("impact", "cost", "confidence"):
+        if getattr(args, name) is not None:
+            meta[name] = getattr(args, name)
+    try:
+        r = writes.write(cfg, "cli", "gap", learn.gap_text(gid, args.question, "manual"),
+                         source_id=f"gap:{gid}", metadata=meta, confirm=_approver(args, "gap"))
+    except ValueError as e:
+        raise SystemExit(f"gap add: {e}") from None
+    _out(args, r.__dict__, f"{r.state} {r.source_id}" + (f": {r.detail}" if r.detail else ""))
+    return 0 if r.state in ("stored", "pending") else 1
+
+
+def cmd_principle(args) -> int:
+    from nimblemind import learn, writes
+
+    cfg = _cfg(args)
+    try:
+        if args.action == "list":
+            active = learn.active_principles(cfg)
+            rows = [{"source_id": r.source_id, **p, "metadata": r.metadata} for r, p in active]
+            _out(args, rows, "\n".join(f"{p['pid']}: {p['statement']} (applies when: "
+                                       f"{p['applies_when']}; not when: {p['not_when']})"
+                                       for _, p in active) or "(no active principles)")
+            return 0
+        if args.action == "report":
+            rows = learn.report(cfg)
+            _out(args, rows, "\n".join(
+                f"{r['pid']}  {r['verdict']:<11} before {r['before']}  after {r['after']}  "
+                f"followed {r['followed']}  violated {r['violated']}  "
+                f"journals since {r['journals_since']}  {r['statement']}" for r in rows)
+                or "(no active principles)")
+            return 0
+    except learn.StateError as e:
+        raise SystemExit(f"principle {args.action}: {e}") from None
+    if args.action == "retire":
+        if not args.id:
+            raise SystemExit("principle retire needs an id")
+        sid = args.id if args.id.startswith("principle:") else f"principle:{args.id}"
+        if not any(r.source_id == sid for r, _ in learn.active_principles(cfg)):
+            raise SystemExit(f"no active principle {sid}")
+        confirm(f"Retire {sid}? It stops being injected and checked.")
+        learn.retire(cfg, sid)
+        say(f"retired {sid}")
+        return 0
+    if not args.statement or not args.statement.strip():
+        raise SystemExit("principle add needs --statement")
+    taken = {r.source_id.removeprefix("principle:") for r in learn.stored(cfg, "principle")}
+    pid = learn.new_id("P", taken)
+    content = learn.principle_text(pid, args.statement, args.applies_when or "",
+                                   args.not_when or "")
+    try:
+        r = writes.write(cfg, "cli", "principle", content, source_id=f"principle:{pid}",
+                         metadata={"evidence": [], "origin": "manual", "supersedes": ""},
+                         confirm=_approver(args, "principle"))
+    except ValueError as e:
+        raise SystemExit(f"principle add: {e}") from None
+    _out(args, r.__dict__, f"{r.state} {r.source_id}" + (f": {r.detail}" if r.detail else ""))
+    return 0 if r.state in ("stored", "pending") else 1
+
+
 def cmd_config(args) -> int:
     from nimblemind import paths
 
@@ -512,7 +657,7 @@ def build_parser() -> argparse.ArgumentParser:
         return p
 
     h = sub.add_parser("hook", help="harness hook entry points (always exit 0)")
-    h.add_argument("event", choices=["session-start", "session-end"])
+    h.add_argument("event", choices=["session-start", "session-end", "prompt"])
     h.add_argument("--harness", help="override the configured harness")
     h.set_defaults(fn=cmd_hook)
 
@@ -570,6 +715,34 @@ def build_parser() -> argparse.ArgumentParser:
     t.set_defaults(fn=cmd_trust)
 
     common(sub.add_parser("config", help="show the effective config and locations")).set_defaults(fn=cmd_config)
+
+    ln = common(sub.add_parser("learn", help="turn stored journals into gaps and principles"))
+    ln.add_argument("--reset-state", action="store_true",
+                    help="rebuild the learning state from the stored records")
+    ln.set_defaults(fn=cmd_learn)
+
+    rs = common(sub.add_parser("research", help="research the highest priority gaps"))
+    rs.add_argument("--max", type=int, default=3)
+    rs.set_defaults(fn=cmd_research)
+
+    g = common(sub.add_parser("gap", help="questions the loop is asking"))
+    g.add_argument("action", choices=["list", "add"])
+    g.add_argument("question", nargs="?")
+    g.add_argument("--impact", type=int)
+    g.add_argument("--cost", type=int)
+    g.add_argument("--confidence", type=int)
+    g.add_argument("--all", action="store_true", help="include verified gaps")
+    g.add_argument("--approve", action="store_true", help="approve now (needs a terminal)")
+    g.set_defaults(fn=cmd_gap)
+
+    pr = common(sub.add_parser("principle", help="what the loop has learned"))
+    pr.add_argument("action", choices=["list", "report", "add", "retire"])
+    pr.add_argument("id", nargs="?")
+    pr.add_argument("--statement")
+    pr.add_argument("--applies-when")
+    pr.add_argument("--not-when")
+    pr.add_argument("--approve", action="store_true", help="approve now (needs a terminal)")
+    pr.set_defaults(fn=cmd_principle)
 
     m = common(sub.add_parser("migrate", help="import from an older on-disk layout"), json_flag=False)
     m.add_argument("source", nargs="?")

@@ -1,8 +1,11 @@
 # nimblemind
 
-Session memory for AI coding agents. At the end of a session it distills the
-transcript into a short journal; at the start of the next one it injects
-where you left off. It runs with no server and no database, on Linux, macOS
+Session memory that learns, for AI coding agents. At the end of a session it
+distills the transcript into a short journal; at the start of the next one it
+injects where you left off. Across sessions it notices what keeps going
+wrong, asks why, researches the questions worth asking, and proposes working
+principles that you approve before they apply; then it checks whether they
+actually changed what happens. It runs with no server and no database, on Linux, macOS
 and Windows, and nothing it stores bypasses an isolation check and your
 approval.
 
@@ -26,7 +29,7 @@ Python 3.12 or newer, provisioned for you by
 [uv](https://docs.astral.sh/uv/):
 
 ```
-uv tool install git+https://github.com/fuu354-droid/nimblemind@v0.1.0
+uv tool install git+https://github.com/fuu354-droid/nimblemind@v0.2.0
 nimblemind --version
 ```
 
@@ -40,7 +43,8 @@ In `~/.claude/settings.json` (or a project's `.claude/settings.json`):
 {
   "hooks": {
     "SessionStart": [{"hooks": [{"type": "command", "command": "nimblemind hook session-start"}]}],
-    "SessionEnd":   [{"hooks": [{"type": "command", "command": "nimblemind hook session-end"}]}]
+    "SessionEnd":   [{"hooks": [{"type": "command", "command": "nimblemind hook session-end"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "nimblemind hook prompt"}]}]
   }
 }
 ```
@@ -73,6 +77,44 @@ nimblemind config                  # effective config and where files live
 ```
 
 `--json` gives machine-readable output on the read commands.
+
+Other tools can use it as their memory through `nimblemind.api` (`store`,
+`recall`, `delete`, `gaps_add`, `gaps_list`, `principles_list`); their
+writes go through the same isolation check and approval, on the `provider`
+path. `integrations/hermes/provider.py` is a worked example.
+
+## The learning loop
+
+```
+nimblemind learn                   # journals -> questions (gaps) and principles
+nimblemind gap list                # questions, by priority
+nimblemind gap add "why does X keep failing" --impact 4
+nimblemind research --max 3        # research the highest priority questions
+nimblemind principle list          # what it has learned (approved only)
+nimblemind principle report        # is each principle holding?
+```
+
+- **It notices.** A pitfall that recurs across journals, a result that
+  differed from what was expected (the journal's `Surprises`), and a
+  principle that exists but was not followed each become a question,
+  worded by a fixed template, never by a model.
+- **It asks what matters.** Questions rank by impact (how often and how
+  badly) raised by uncertainty and divided by cost, not by uncertainty
+  alone. Research stops on a confident answer or after two tries, and a
+  parked question waits for new evidence.
+- **It proposes, you decide.** A lesson that recurs, or a ruling you made
+  once, becomes a principle with a scope (`Applies when`, `Not when`). It
+  waits in `pending` until you approve it; approving is what makes it apply.
+  A revision names the principle it replaces.
+- **It checks itself.** Each journal records whether the session followed
+  or violated each principle. `principle report` shows the counts before and
+  after a principle became active, and a principle that is known but not
+  followed is flagged and raised as a question of its own. A question is
+  only `verified` once the problem stops recurring after its answer.
+
+At session start the block holds the active principles and the newest
+journal's `Unfinished` section; the prompt hook adds principles and records
+that match what you just asked, once per session.
 
 ## Configuration
 

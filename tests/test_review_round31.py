@@ -16,13 +16,13 @@ def strict_loads(text):
 
 
 def test_f31_1_config_json_is_strict_with_non_finite_free_keys(tmp_path, monkeypatch, capsys):
-    (tmp_path / ".nimblemind.toml").write_text("[journal]\nextra = nan\n[curiosity]\nmore = inf\n",
+    (tmp_path / ".nimblemind.toml").write_text("[journal]\nextra = nan\nmore = inf\n",
                                                encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PWD", str(tmp_path))
     assert cli.main(["config", "--json"]) == 0
     data = strict_loads(capsys.readouterr().out)
-    assert data["effective"]["journal"]["extra"] == "nan" and data["effective"]["curiosity"]["more"] == "inf"
+    assert data["effective"]["journal"]["extra"] == "nan" and data["effective"]["journal"]["more"] == "inf"
 
 
 def test_f31_1_config_text_is_strict_too(tmp_path, monkeypatch, capsys):

@@ -17,7 +17,7 @@ import sys
 from datetime import datetime, timezone
 
 from nimblemind import harness as harness_mod
-from nimblemind import journal, model, writes
+from nimblemind import journal, learn, model, writes
 from nimblemind.fsutil import append_line, run_dir
 from nimblemind.records import now_iso
 
@@ -63,6 +63,25 @@ def source_id_for(session_id: str) -> str:
     return f"session:{stamp}-{sid}-{full}{secrets.token_hex(2)}"
 
 
+def _listed_principles(cfg) -> list[tuple[str, str]]:
+    """(P-id, statement) of active principles, newest first, within
+    `learn.check_chars`. A broken learning state lists none rather than
+    losing the journal."""
+    try:
+        active = learn.active_principles(cfg)
+    except learn.StateError as e:
+        _log(cfg, f"principle checks skipped: {e}")
+        return []
+    out, used = [], 0
+    for _, p in active:
+        line = len(p["pid"]) + len(p["statement"]) + 4
+        if used + line > cfg["learn"]["check_chars"]:
+            break
+        out.append((p["pid"], p["statement"]))
+        used += line
+    return out
+
+
 def distill(cfg, transcript_path: str, session_id: str) -> str:
     """Run one distill. Returns the outcome word it logged."""
     if cfg["distiller"].get("command") == "none":
@@ -74,7 +93,8 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
         _log(cfg, f"skip {session_id}: only {turns} human turns")
         return "skip"
 
-    system = journal.instructions(cfg)
+    listed = _listed_principles(cfg)
+    system = journal.instructions(cfg, listed)
     extra, text = "", ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
@@ -82,7 +102,7 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
         except model.ModelError as e:
             _log(cfg, f"fail {session_id}: {e}")
             return "fail"
-        found = journal.problems(cfg, text)
+        found = journal.problems(cfg, text, checks=bool(listed))
         if not found:
             break
         _log(cfg, f"retry {session_id} attempt {attempt}: {'; '.join(found)}")
@@ -94,8 +114,12 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
 
     sid = source_id_for(session_id)
     header = f"# Session journal {sid.removeprefix('session:')}\n\n"
+    meta = {"session_id": session_id}
+    checks = learn.principle_checks(text, {pid for pid, _ in listed})
+    if checks:
+        meta["principle_checks"] = checks
     result = writes.write(cfg, "distill", "journal", header + text.strip() + "\n",
-                          source_id=sid, metadata={"session_id": session_id})
+                          source_id=sid, metadata=meta)
     _log(cfg, f"{result.state} {session_id}: {sid}" + (f" ({result.detail})" if result.detail else ""))
     return result.state
 

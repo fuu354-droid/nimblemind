@@ -8,7 +8,6 @@ turn per line, `USER:` or `ASSISTANT:` prefixed where the harness can tell.
 from __future__ import annotations
 
 import json
-import os
 
 from nimblemind.fsutil import logical_cwd
 from nimblemind.harness import condense

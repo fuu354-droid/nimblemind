@@ -110,7 +110,7 @@ def test_5_nothing_written_under_dot_claude(cfg, fake_model, tmp_path, user_conf
 
     home = tmp_path / "home"
     sections = "\n".join(f"## {s}\n- none" for s in
-                         ["Decisions", "Rulings", "Pitfalls", "Unfinished",
+                         ["Decisions", "Rulings", "Pitfalls", "Surprises", "Unfinished",
                           "Lessons learned", "Improvements found"])
     user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(sections))}\n')
     transcript = tmp_path / "t.jsonl"

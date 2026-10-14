@@ -15,7 +15,8 @@ from nimblemind.backends import BackendError
 from nimblemind.records import Record
 from conftest import toml_list
 
-SECTIONS = ["Decisions", "Rulings", "Pitfalls", "Unfinished", "Lessons learned", "Improvements found"]
+SECTIONS = ["Decisions", "Rulings", "Pitfalls", "Surprises", "Unfinished", "Lessons learned",
+            "Improvements found"]
 
 
 def journal_text(unfinished="- resume the hook wiring"):

@@ -11,7 +11,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
-KINDS = ("journal", "answer", "note", "gap")
+KINDS = ("journal", "answer", "note", "gap", "principle")
 
 
 def now_iso() -> str:
