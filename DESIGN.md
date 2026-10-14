@@ -135,8 +135,9 @@ not trusted the way the user's own file is:
   access or a bigger injection. This holds even for a trusted project.
 - Every key that runs a command, loads code, chooses where data is sent or
   which memory pool a session reads (`namespace`, `harness`, `backend`, the
-  distiller and researcher, `isolation.command`, `curiosity.gaps_file` and
-  `curiosity.after_run`) applies only once a person has trusted that exact
+  distiller and researcher, `isolation.command`, and the whole of `learn`
+  and `curiosity`, whose settings decide when model calls run and what is
+  proposed as a rule) applies only once a person has trusted that exact
   file with `nimblemind trust`, at a terminal, which records the hash of
   the bytes it showed, keyed by the file's absolute path as found (not
   resolved). Every entry point (CLI `--cwd`, hook payload, distill child)
@@ -163,17 +164,20 @@ command = "claude-cli"
 model = "sonnet"
 
 [journal]
-sections = ["Decisions", "Rulings", "Pitfalls", "Unfinished",
+sections = ["Decisions", "Rulings", "Pitfalls", "Surprises", "Unfinished",
             "Lessons learned", "Improvements found"]
 recall_sections = ["Unfinished", "Pitfalls"]
+core_sections = ["Unfinished"]   # [] injects the whole newest journal
 max_words = 500
 # language = "en"      unset: no language rule
 banned_chars = []
 
 [budget]
 total_chars = 6000
-core_chars = 3500
+principles_chars = 1200
+core_chars = 2500
 recall_chars = 2000
+prompt_chars = 3000
 
 [approval]             # "ask" or "deny" only; see section 7 for "allow"
 # distill = "ask"      every path defaults to "ask"; naming a path here
@@ -181,13 +185,21 @@ recall_chars = 2000
 # gap = "ask"          does not override, so leave a path out to let
 # provider = "ask"     `nimblemind approval allow` apply to it
 # cli = "ask"
+# learn = "ask"        approving a learned principle is what activates it
 
 [isolation]
 checks = ["builtin-secrets"]
 
+[learn]                # section 15
+auto = true
+similarity = 0.35
+recur_min = 2
+
 [curiosity]
 confidence_floor = 70
-# gaps_file = "path/in/project"   unset: kept in the data home
+min_priority = 1.0
+max_attempts = 2
+verify_window = 5
 ```
 
 `namespace` names the memory pool a session reads and writes. A project config
@@ -373,28 +385,51 @@ At session start the package injects one block, assembled in this order and
 counted together against `budget.total_chars`:
 
 1. The source label line, `[nimblemind <namespace>]`, which counts.
-2. Core memory: the newest approved journal, capped at `core_chars`.
-3. Recall: up to `k` older records' `recall_sections`, capped at
+2. Principles: the active principles (section 15.6), whole items only,
+   capped at `principles_chars`. A principle reported `not-holding`
+   (section 15.8) comes first, then the rest newest first.
+3. Core memory: the newest approved journal's `journal.core_sections`
+   (default `["Unfinished"]`), capped at `core_chars`. An empty
+   `core_sections` list injects the whole journal, as v0.1.0 did.
+4. Recall: up to `k` older records' `recall_sections`, capped at
    `recall_chars`.
-4. A truncation note when anything was cut, which counts too.
+5. A truncation note when anything was cut, which counts too.
 
-Each cap is a hard cut with a note, never a silent trim. If the label plus
-core exceeds the total, recall is dropped first and core is cut next. The
-per-prompt recall hook (section 10) has its own `prompt_chars` cap, which is
-also counted against `total_chars` per prompt. The always-injected core is
-the one thing a person relies on staying small, so `core_chars` cannot be set
-above `total_chars`, and config validation refuses that.
+Each cap is a hard cut with a note, never a silent trim. Over the total,
+recall is dropped first, core is cut next, principles are cut last (whole
+items, from the end). The per-prompt hook (section 10) has its own
+`prompt_chars` cap. No single cap may be set above `total_chars`, and config
+validation refuses that.
+
+Why core is no longer the whole newest journal: recency is not relevance.
+The newest journal's decisions and pitfalls are about whatever that session
+did, which is often not this one; its `Unfinished` section is what a resumed
+task needs. Everything else in it stays reachable through recall and the
+prompt hook, which query by what the session is actually doing.
 
 ## 10. Doors
 
 Harness hooks, chosen by `harness`:
 
-- `nimblemind hook session-start`: recall, prints the harness's injection
-  format.
-- `nimblemind hook session-end`: detaches a distill process and returns.
-- `nimblemind hook prompt` (v0.2.0): per-prompt recall with the prompt as
-  the query, capped at `budget.prompt_chars` (the origin workspace's
-  `/augment` hook moves here, as a backend call).
+- `nimblemind hook session-start`: the block of section 9, in the harness's
+  injection format.
+- `nimblemind hook session-end`: detaches a distill process and returns. The
+  same child runs `learn` (section 15.5) after the distill when
+  `learn.auto` is true.
+- `nimblemind hook prompt`: per-prompt recall, the prompt as the query, on
+  every backend including `local`:
+  1. A prompt with fewer than `budget.prompt_min_tokens` (default 3)
+     distinct tokens injects nothing.
+  2. Principles whose statement and `Applies when` share at least
+     `learn.match_min` (default 2) distinct tokens with the prompt come
+     first, then up to `budget.prompt_k` recalled records of any other
+     kind, all under `[nimblemind <namespace> prompt]` and capped at
+     `budget.prompt_chars` with the same cut-and-note rule as section 9.
+  3. Nothing already injected into the same session (by session start or an
+     earlier prompt) is injected again. The session's injected ids live in
+     `<home>/run/sessions/<sha256 of the session id>.json`, ids only, and
+     files older than seven days are removed on the next hook run.
+  4. Silent on any failure, as every hook is.
 
 Harness adapters translate payloads and transcripts: `claude-code` (hook JSON,
 JSONL transcript) and `generic` (plain text on stdin, text out). An adapter is
@@ -404,29 +439,32 @@ Model calls go through `distiller.command` and `researcher.command`:
 `claude-cli` (the `claude -p` CLI with a model alias, never a dated build) or
 an `argv` list for any command that reads a prompt on stdin and prints
 text. Set to `none`, distill is skipped and journals come only from
-`nimblemind store`.
+`nimblemind store`; `learn` then drafts no principle text (section 15.5) and
+`research` refuses to run. `researcher.tools` (default
+`["WebSearch", "WebFetch"]`) names the tools a `claude-cli` researcher may
+use; an `argv` researcher ignores it.
 
 Outward API (the provider direction): `nimblemind.api` exposes `store`,
-`recall`, `delete`, `gaps.add`, `gaps.list`, all routing writes through
-section 6. The CLI mirrors it with `--json`. `nimblemind serve` runs the same
-API over local HTTP for a multi-client setup, with isolation and approval
-enforced in the server. A Hermes memory provider built on this API is the
-first external integration test, under `integrations/hermes/`; it is a test,
-not a dependency.
+`recall`, `delete`, `gaps_add`, `gaps_list` and `principles_list`, every
+write routed through section 6 on path `provider`. The CLI mirrors it with
+`--json`. A Hermes-style memory provider built on this API is the first
+external integration test, under `integrations/hermes/`; it is a test, not a
+dependency.
 
 ## 11. Curiosity
 
-- `nimblemind gap add "<q>" --confidence N [--context ...]`, `gap list`,
-  `gap resolve`. Gaps live in `curiosity/<ns>/gaps.jsonl` unless
-  `curiosity.gaps_file` names a project file. A gap add goes through the write
-  path as path `gap`.
-- `nimblemind research [--max N]`: researches the lowest confidence open
-  gaps through `researcher.command`, under a cross-platform lock. Each answer
-  is a write on path `research`. The answer is tagged as untrusted evidence in
-  its stored text.
+Curiosity is one half of the learning loop and is specified there
+(section 15): where questions come from, how they are ranked, when research
+stops and how an answer is verified. The earlier plan (a queue researched
+lowest confidence first) is replaced, not shipped. Two points from it stand:
+
 - Commit, push and notification steps are not in the package. A
-  `curiosity.after_run` argv hook lets a project run its own (the origin
-  workspace's git commit and chat labeling stay there).
+  `curiosity.after_run` argv hook lets a project run its own after
+  `nimblemind research` (trusted projects only, section 4).
+- `curiosity.gaps_file` is withdrawn: gap questions are records and go
+  through the write path like every other record, and their lifecycle lives
+  in the data home (section 15.2). A project that wants the queue in its
+  tree reads it with `nimblemind gap list --json`.
 
 ## 12. Acceptance
 
@@ -440,12 +478,32 @@ not a dependency.
    both end in `held/` and never reach the backend; a write to namespace A
    containing namespace B's identity string is refused.
 4. Session-start injection never exceeds `total_chars`, including label and
-   truncation note, across a generated set of oversized journals.
+   truncation note, across a generated set of oversized journals and
+   principles.
 5. No path under `~/.claude/` is written by any test (asserted by running the
    suite with `HOME` pointed at a temp directory and checking it afterwards).
 6. The origin workspace's hooks run on the package with its project config
    and pass its own suite.
 7. A Hermes-style provider stub stores and recalls through `nimblemind.api`.
+8. Signals: a pitfall recurring in two stored journals produces exactly one
+   gap; a third recurrence merges into that gap and raises its priority
+   instead of adding a second; pending and held journals produce nothing.
+9. Ranking and stopping: a `not-holding` gap outranks a low-confidence
+   `manual` gap of default impact; a gap whose answers stay under
+   `confidence_floor` is parked after `max_attempts`; an answered gap is
+   `verified` after `verify_window` later journals without its signal and
+   reopens when the signal recurs.
+10. Principles: a lesson recurring across journals produces a principle in
+    `pending/` with its evidence ids; no hook injects it before approval; an
+    approved revision retires the principle it supersedes.
+11. Application: a journal whose `Principle checks` report `violated` for an
+    active principle produces a `not-holding` signal, and `principles
+    report` shows that principle's before and after counts.
+12. Prompt hook on the `local` backend injects matching principles and
+    records within `prompt_chars`, never repeats an id already injected in
+    the same session, and prints nothing when it fails.
+13. Session start injects active principles and the newest journal's
+    `core_sections`, not the whole journal, within `total_chars`.
 
 ## 13. Migration from the origin workspace
 
@@ -455,14 +513,215 @@ answers from an older layout (the origin's `~/.claude/brain/journals` and
 Imported files already passed that workspace's gate, so each gets an approval
 entry with `rule: "migrated"` and its hash, and the source is left in place
 for the person to delete. Quarantined and unscanned files import into `held/`.
+Imported journals carry no `Surprises` or `Principle checks` section; they
+still feed the recurring and lesson signals, which read only the sections
+present.
 
 ## 14. Release order
 
 1. Core: locations, config, backend interface with `local` and `memila`,
    write path, approval, isolation, budget, `claude-code` and `generic`
    harness adapters, session hooks, CLI, migrate. Tag `v0.1.0`.
-2. Curiosity, the prompt hook, `serve`, the outward API and the Hermes test.
-   Tag `v0.2.0`.
+2. The learning loop (section 15), the prompt hook, the outward API and the
+   Hermes test. Tag `v0.2.0`.
 3. The origin workspace switches to the pinned tag: its hooks call the
    console script, its project config carries what used to be constants, and
    its own `brain_*` and `curiosity_*` scripts are removed.
+
+## 15. The learning loop
+
+Storing and finding is not learning. The loop this section specifies is:
+record, notice, ask, research, update what is believed, apply it, and check
+later whether applying it changed what happened. Every step is a rule this
+package runs, so "what to ask next" and "when to stop" are never delegated
+to a model or a retrieval framework (section 1). A model is used only to
+write text: a journal, a principle's wording, a research answer.
+
+### 15.1 Records
+
+Two kinds join `journal`, `answer` and `note`: `principle` and `gap`, and
+one write path joins section 6's: `learn`, for principles. A principle
+proposed by `learn` or by research goes through isolation and approval like
+any other write; with the default `ask`, approving it is what makes it
+active. A person can grant `learn` with `approval allow learn`, which is
+their choice to let learned principles apply without review.
+
+A principle's content, parsed by its fixed labels:
+
+```
+# Principle P-<8 hex>
+Statement: <one sentence, what to do or not do>
+Applies when: <the situation that triggers it>
+Not when: <the exceptions, or "none">
+```
+
+Its metadata: `evidence` (the source ids it was drawn from), `origin`
+(`lessons`, `rulings`, `research` or `manual`) and `supersedes` (the id of
+the principle it revises, or empty). Its source id is `principle:P-<8 hex>`.
+
+A gap's content:
+
+```
+# Gap G-<8 hex>
+Question: <the question>
+Signal: recurring | surprise | not-holding | manual
+```
+
+Its metadata: `signal`, `evidence` (source ids) and, for a manual gap,
+`impact`, `cost` and `confidence`. Its source id is `gap:G-<8 hex>`.
+
+A person adds either by hand: `nimblemind principle add --statement ...
+--applies-when ... [--not-when ...]` and `nimblemind gap add "<question>"
+[--impact 1-5] [--cost 1-5] [--confidence 0-100]`, both on path `cli`.
+
+### 15.2 Learning state
+
+What changes over a gap's or a principle's life (status, counts, attempts,
+which journals were already read) lives in
+`<home>/learn/<ns>/state.json`, written atomically under the namespace's
+lock. It holds ids, enumerated words, numbers and timestamps only, and
+loading refuses any other value: free text is a record, and a record goes
+through section 6. A state file that fails to load is a reported error,
+never silently reset; `nimblemind learn --reset-state` rebuilds it from the
+stored records (statuses back to `open`, counts recomputed).
+
+Gap statuses: `open`, `answered`, `parked`, `verified`, `recurred` (which
+behaves as `open` and records that verification failed once). Principle
+states: `active` (stored, not retired) and `retired` (superseded, or
+retired by a person with `nimblemind principle retire <id>`, which needs a
+terminal like every command that widens what an agent may do).
+
+### 15.3 Signals
+
+`learn` reads stored journals only, never `pending/` or `held/`. An item is
+one `- ` line of a section, except `- none`. Two items are similar when
+their content tokens (the local backend's tokens, minus a fixed list of
+English stop words, minus non-CJK tokens under three characters) have a
+Jaccard index of at least `learn.similarity` (default 0.35).
+
+| signal | fires when | weight |
+|---|---|---|
+| `recurring` | an item in `learn.pitfall_sections` (default `Pitfalls`) is similar to items in at least `learn.recur_min - 1` other journals (default `recur_min` 2) | 2 |
+| `surprise` | any item in `learn.surprise_sections` (default `Surprises`: where a result differed from what was expected) | 3 |
+| `not-holding` | a journal stored after a principle became active reports it `violated` (section 15.7), or a pitfall similar to the principle's evidence recurs after activation | 4 |
+| `manual` | `nimblemind gap add` | the given impact, default 2 |
+
+A signal similar to an existing gap that is not `verified` (by its question
+item, or for `not-holding` the same principle id) merges into it: the
+journal is added to that gap's occurrences in the state, no new record is
+written. Otherwise a new gap is written on path `gap`, its question built
+from a fixed template, never by a model:
+
+- recurring: `Why does this keep happening, and what would prevent it: <item>`
+- surprise: `What explains this result differing from what was expected: <item>`
+- not-holding: `Principle P-x exists but was not applied (<journal id>): what in the workflow lets it be skipped?`
+
+Each journal and item is read once: the state records which journal ids
+`learn` has consumed, so running it twice adds nothing.
+
+### 15.4 Ranking and stopping
+
+`research` takes `open` and `recurred` gaps, highest priority first, ties
+oldest first, up to `--max` (default 3), skipping any under
+`curiosity.min_priority` (default 1.0):
+
+```
+impact     = weight (section 15.3) * (1 + log2(occurrences))
+uncertainty = (100 - confidence) / 100          confidence: manual value, else 50,
+                                                 else the last answer's
+priority   = impact * (0.5 + uncertainty) / cost
+```
+
+`cost` is the manual value, else `curiosity.cost.<signal>` (defaults:
+recurring 1, not-holding 1, surprise 2, manual 2), on 1 to 5. A question
+the agent's own history can answer is cheaper than one needing the web, and
+impact outweighs uncertainty: a very uncertain question nobody is blocked on
+ranks under a moderately certain one that keeps costing sessions.
+
+Stopping: an answer with confidence at or above `curiosity.confidence_floor`
+(default 70) moves the gap to `answered`. Under it, the attempt counts; at
+`curiosity.max_attempts` (default 2) the gap is `parked`. A parked gap is
+researched again only once its signal recurs (new evidence, attempts reset).
+A research answer that is held or rejected counts as an attempt.
+
+### 15.5 Learning (`nimblemind learn`)
+
+One run, under the namespace's lock:
+
+1. Signals to gaps (section 15.3).
+2. Lessons to principles. Items of `learn.lesson_sections` (default
+   `Lessons learned` and `Rulings`) are grouped by similarity. A group
+   qualifies when it spans at least `learn.recur_min` journals, or when any
+   item comes from `learn.ruling_sections` (default `Rulings`): a person's
+   ruling is enough once. A group similar to an active or pending
+   principle's statement and `Applies when` is not proposed again; its
+   journals are counted as that principle's reinforcement in the state.
+3. A qualifying group becomes a principle on path `learn`. The distiller
+   drafts its three lines from the group's items and from the active
+   principles it overlaps, and may name one it revises (`Revises: P-x`),
+   which becomes `supersedes`. With `distiller.command = "none"` the
+   newest item becomes the statement verbatim, `Applies when` and `Not
+   when` are `unspecified`. A draft missing a label, or naming a principle
+   that is not active, is refused and the group is tried again next run.
+4. Verification (section 15.8).
+
+When a principle with `supersedes` is stored, through any route including
+`pending approve`, the principle it supersedes is retired in the state.
+
+### 15.6 Applying
+
+Active principles reach the agent at session start (section 9) and in the
+prompt hook when the prompt matches them (section 10). The session-start
+order puts `not-holding` principles first: a rule that is known and not
+followed needs the reminder more than one that holds.
+
+### 15.7 Principle checks
+
+When principles are active, the distiller's instructions list them (id and
+statement, newest first, capped at `learn.check_chars`, default 1500) and
+the journal gains one more section:
+
+```
+## Principle checks
+- P-1a2b3c4d: followed | violated | n/a: <evidence from the session>
+```
+
+The section is required only when principles were listed. Lines naming an
+id that was not listed, or a verdict outside the three words, are dropped
+when parsed. The parsed result goes into the journal's metadata as
+`principle_checks` (`{id: verdict}`), so the approval that stores the
+journal covers it.
+
+### 15.8 Verifying
+
+`nimblemind principles report [--json]`, and step 4 of every `learn`, read
+each active principle against the journals stored after it became active
+(its approval entry's time):
+
+- `before`: how many journals its evidence spans; `after`: how many later
+  journals carry a pitfall similar to that evidence; `followed` and
+  `violated`: the principle-check counts after activation.
+- Verdict, first match wins: `not-holding` (any violation or recurrence
+  after activation, which also raises the signal of section 15.3);
+  `untested` (fewer than `curiosity.verify_window`, default 5, journals
+  since activation); `unused` (no `followed` or `violated` in the last
+  `learn.stale_after`, default 20, journals: a candidate for retiring, never
+  retired automatically); `holding`.
+
+An `answered` gap is `verified` once `verify_window` journals stored after
+its answer carry no item similar to its evidence, and becomes `recurred`
+(open again, its occurrences raised) when one does. Verified is the only
+status that means the loop closed: the problem stopped recurring after the
+answer, not only that an answer exists.
+
+### 15.9 What is left out, and why
+
+- `serve` (local HTTP over the API) leaves this release. No second client
+  exists to share a store with, section 7 already states that a shared
+  remote store needs enforcement in the service, and a network write
+  endpoint is a larger attack surface than the CLI whose review took the
+  whole of v0.1.0. It ships when a second client does.
+- Contradiction is found by overlap plus the drafter's `Revises:` line,
+  never by an inference engine: a person approves every revision.
+- Nothing is forgotten automatically. `unused` principles and `parked` gaps
+  are reported; retiring and deleting stay a person's command.
