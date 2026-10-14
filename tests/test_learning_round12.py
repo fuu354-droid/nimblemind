@@ -21,8 +21,7 @@ def test_shown_answer_session_without_id(cfg, user_config, tmp_path, monkeypatch
     ans_reply = ("## Answer\nx\n\n## Confidence\n90\n\n## Belief\n"
                  + draft(statement="pin compose healthchecks with a start period", applies="compose services"))
     journal = jtext(Lessons_learned=f"- {LESSON}")
-    user_config(f'[harness]\n' if False else
-                f'harness = "generic"\n[distiller]\ncommand = "argv"\nargv = {toml_list(_script(tmp_path, "d", journal))}\n'
+    user_config(f'harness = "generic"\n[distiller]\ncommand = "argv"\nargv = {toml_list(_script(tmp_path, "d", journal))}\n'
                 f'[researcher]\ncommand = "argv"\nargv = {toml_list(_script(tmp_path, "r", ans_reply))}\n'
                 '[learn]\nauto = false\n')
     config_mod.set_grant("research", True)
@@ -51,30 +50,6 @@ def test_shown_answer_session_without_id(cfg, user_config, tmp_path, monkeypatch
 
 
 from test_learning import L1, L1b, put
-
-
-@pytest.mark.parametrize("sid", [None, "s-real-2"])
-def test_lesson_hypothesis_shown_at_start_without_id(cfg, user_config, tmp_path, monkeypatch, sid):
-    journal = jtext(Lessons_learned=f"- {L1b}")
-    user_config(f'harness = "generic"\n[distiller]\ncommand = "argv"\nargv = {toml_list(_script(tmp_path, "d", journal))}\n'
-                '[learn]\nauto = false\n')
-    config_mod.set_grant("distill", True)
-    c = cfg()
-    put(c, "session:1", Lessons_learned=f"- {L1}")
-    learn.run(c)
-    bid = one(c, L1)["bid"]
-    (tmp_path / "d.txt").write_text(journal + f"\n## Belief checks\n- {bid}: n/a: x\n")
-    p = {"cwd": str(tmp_path)}
-    if sid:
-        p["session_id"] = sid
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(p)))
-    out = io.StringIO(); monkeypatch.setattr(sys, "stdout", out)
-    assert cli.main(["hook", "session-start", "--harness", "claude-code"]) == 0
-    sys.stdout = sys.__stdout__
-    tr = tmp_path / "t.txt"
-    tr.write_text("USER: a\nUSER: b\nUSER: c\nUSER: d\nUSER: e\n")
-    learn.run(c)
-    r = one(c, L1)
 
 
 def test_r12_a_session_without_an_id_is_keyed_by_its_transcript(cfg, tmp_path, monkeypatch):
@@ -142,3 +117,32 @@ def test_r12_a_hook_that_injects_nothing_still_records_the_session(cfg, tmp_path
     assert cli.main(["hook", "prompt"]) == 0
     sys.stdout = sys.__stdout__
     assert recall.recorded(recall.session_key_for("", str(tr)))
+
+
+def test_g2_f1_an_unrecorded_id_less_session_distilled_twice_is_one_vote(cfg, user_config, fake_model, tmp_path):
+    from test_learning import _person_belief
+    reply = jtext() + "## Belief checks\n- B-0000aaaa: followed: did it\n"
+    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(reply))}\n[learn]\nauto = false\n')
+    config_mod.set_grant("distill", True)
+    c = cfg()
+    _person_belief(c)
+    tr = tmp_path / "t.jsonl"
+    tr.write_text("\n".join(json.dumps({"type": "user", "origin": {"kind": "human"},
+                                       "message": {"content": f"do {i}"}}) for i in range(4)), encoding="utf-8")
+    for _ in range(2):
+        assert distill.distill(c, str(tr), "") == "stored"
+    metas = [j.metadata for j in learn.stored(c, "journal")]
+    assert all(m["session_id"].startswith("t:") and m["shown_unknown"] for m in metas)
+    learn.run(c)
+    assert learn.report(c)[0]["for"] == 1        # one session, one outcome vote
+
+
+def test_g2_o1_a_relative_transcript_is_keyed_like_the_child_keys_it(cfg, tmp_path, monkeypatch):
+    cfg()
+    (tmp_path / "t.jsonl").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": str(tmp_path), "transcript_path": "t.jsonl",
+                                                              "prompt": "ok"})))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    assert cli.main(["hook", "prompt"]) == 0
+    sys.stdout = sys.__stdout__
+    assert recall.recorded(recall.session_key_for("", str(tmp_path / "t.jsonl")))

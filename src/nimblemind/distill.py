@@ -108,10 +108,11 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
     # The key the hooks kept this session's shown set under (its id, else
     # its transcript); none means what it was shown cannot be known.
     key = recall.session_key_for(session_id, os.path.abspath(transcript_path))
-    # A key made from the transcript is only good if the hooks used it too.
-    if not recall.real_session_id(session_id) and not recall.recorded(key):
-        key = ""
-    listed, shown = _listed_beliefs(cfg, key)
+    # The key names the session (one vote, however often it is distilled);
+    # what it was shown is known only for a harness id or a transcript key
+    # the hooks recorded under.
+    known = bool(key) and bool(recall.real_session_id(session_id) or recall.recorded(key))
+    listed, shown = _listed_beliefs(cfg, key if known else "")
     system = journal.instructions(cfg, listed)
     extra, text = "", ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -133,13 +134,13 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
     sid = source_id_for(session_id)
     header = f"# Session journal {sid.removeprefix('session:')}\n\n"
     meta = {"session_id": key or "unknown"}
-    if not key:
+    if not known:
         meta["shown_unknown"] = True
     if shown:
         meta["beliefs_shown"] = shown
     # Every record the hooks injected: a belief drawn from one of them (a
     # research answer) is not independently restated by this session.
-    seen = sorted(x for x in recall.injected(key) if x and len(x) <= 200 and not any(
+    seen = sorted(x for x in recall.injected(key if known else "") if x and len(x) <= 200 and not any(
         c.isspace() for c in x))
     if seen:
         meta["records_shown"] = seen
@@ -159,6 +160,8 @@ def hook(cfg, payload: dict, harness_name: str = "") -> None:
     if model.is_child():
         return
     transcript = payload.get("transcript_path", "")
+    if transcript and not os.path.isabs(transcript) and os.path.isabs(payload.get("cwd", "")):
+        transcript = os.path.join(payload["cwd"], transcript)   # the same path the hooks keyed
     if not transcript or not os.path.isfile(transcript):
         return
     spawn(transcript, payload.get("session_id", ""), payload.get("cwd", ""),

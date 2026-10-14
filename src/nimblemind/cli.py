@@ -173,7 +173,10 @@ def cmd_hook(args) -> int:
             payload = h.read_payload(raw)
             cfg = config_mod.load(_hook_cwd(payload))
         cfg.data["harness"] = h.name
-        sid = recall.session_key_for(payload.get("session_id", ""), payload.get("transcript_path", ""))
+        tp = payload.get("transcript_path", "")
+        if isinstance(tp, str) and tp and not os.path.isabs(tp) and os.path.isabs(payload.get("cwd", "")):
+            tp = os.path.join(payload["cwd"], tp)   # a relative transcript is the session's, not ours
+        sid = recall.session_key_for(payload.get("session_id", ""), tp)
         recall.prune(keep=sid)
         if args.event in ("session-start", "prompt"):
             if args.event == "session-start":
