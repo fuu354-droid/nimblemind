@@ -146,9 +146,13 @@ def logical_cwd() -> str:
     pwd = os.environ.get("PWD", "")
     here = os.getcwd()
     if pwd and os.path.isabs(pwd):
+        # Compare the normalized text, the one returned: the kernel resolves
+        # `..` after following a symlink, normpath drops it textually, so a
+        # PWD with `..` past a link can name another directory once folded.
+        norm = os.path.normpath(pwd)
         try:
-            if os.path.samefile(pwd, here):
-                return os.path.normpath(pwd)
+            if os.path.samefile(norm, here):
+                return norm
         except OSError:
             pass
     return here

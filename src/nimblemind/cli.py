@@ -207,7 +207,7 @@ def cmd_distill(args) -> int:
     if args.harness:
         cfg.data["harness"] = args.harness
     try:
-        distill.distill(cfg, args.transcript, args.session_id)
+        distill.distill(cfg, _abs(args.transcript), args.session_id)
     except Exception as e:
         distill._log(cfg, f"error {args.session_id}: {type(e).__name__}: {e}")
         return 1
@@ -428,9 +428,8 @@ def cmd_trust(args) -> int:
     # the path as found).
     path = None
     if args.path:
-        given = Path(args.path)
-        path = Path(_abs(given)) / ".nimblemind.toml" if given.is_dir() \
-            else Path(_abs(given))
+        given = Path(_abs(Path(args.path).expanduser()))   # the logical directory, as everywhere
+        path = given / ".nimblemind.toml" if given.is_dir() else given
     if path is None:
         from nimblemind.paths import find_project_config
 
@@ -479,15 +478,17 @@ def cmd_migrate(args) -> int:
 
     # Everything that would make migrate.run fail is checked before a person
     # is asked: a missing source, a file, a directory that cannot be listed.
+    # A relative source joins the logical cwd, like every other path argument.
+    src = Path(_abs(Path(source).expanduser()))
     try:
-        if path_kind(Path(source).expanduser()) != "dir":
+        if path_kind(src) != "dir":
             raise SystemExit(visible(f"FAIL {source}: not a directory"))
-        list_suffix(Path(source).expanduser(), ".md")
+        list_suffix(src, ".md")
     except OSError as e:
         raise SystemExit(visible(f"FAIL {source}: cannot be listed: {e.strerror or e}")) from None
     if not args.dry_run:
-        confirm(f"Import every passing file in {source} into namespace {cfg.namespace!r}?")
-    lines = migrate.run(cfg, Path(source).expanduser(), args.kind, dry_run=args.dry_run)
+        confirm(f"Import every passing file in {src} into namespace {cfg.namespace!r}?")
+    lines = migrate.run(cfg, src, args.kind, dry_run=args.dry_run)
     say("\n".join(lines) or "(no files)")
     return 1 if any(ln.startswith("FAIL") for ln in lines) else 0
 
