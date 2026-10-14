@@ -613,17 +613,28 @@ revoke learn` is not needed and does nothing.
 
 ### 15.2 Learning state
 
-What changes as evidence arrives lives in `<home>/learn/<ns>/state.json`,
-written atomically under the namespace's lock: each belief's evidence list
-(kind, the session it came from, the record it points at), its status and
-confidence, its transition history, each gap's lifecycle, and which journals
-were read. It holds ids, enumerated words, numbers and timestamps only, and
-loading refuses any other value: free text is a record, and a record goes
-through section 6. A state that fails to load is a reported error, never
-silently reset; `nimblemind learn --reset-state` rebuilds it by replaying
-every stored journal, belief, answer and person event from the start, in
-time order, without writing any record: it reaches the state the runs
-reached.
+What is believed is derived, never accumulated. Every belief's evidence,
+confidence, status and history, and every gap's lifecycle, are a function
+of the stored records (journals, beliefs, gaps, answers, pending answers)
+and the person's event log, recomputed by every `learn` run. So the order
+in which records became visible (a journal approved a week after it was
+queued, a run cut short by `max_new`, a research answer approved later)
+cannot change the result. The derived state is cached in
+`<home>/learn/<ns>/state.json`; a cache that fails to load is reported by
+the commands that read it (hooks stay silent) and rebuilt, losing nothing,
+by the next run. `nimblemind learn --reset-state` is the derivation alone:
+it writes no record.
+
+What a run does (write a new belief, a gap, a revision) is a side effect,
+recorded once in `<home>/learn/<ns>/done.jsonl`, so it happens once however
+often the history is derived: a rejected gap is not asked again, and a
+journal's lessons are proposed once. A person's own actions on a belief
+(`belief retire`, `belief stale`) are appended to
+`<home>/learn/<ns>/events.jsonl` and are part of what is derived from.
+
+All three files hold ids, enumerated words, numbers and timestamps only;
+loading refuses any other value. Free text is a record, and a record goes
+through section 6.
 
 ### 15.3 Evidence
 
@@ -634,18 +645,22 @@ minus a fixed list of English stop words, minus non-CJK tokens under three
 characters) have a Jaccard index of at least `learn.similarity` (default
 0.35). A belief's signature is its statement and `Applies when`.
 
-Evidence is ordered in time. Every belief has a birth time: the session it
-came from for a lesson or ruling, otherwise the moment it was written. Only
-journals after that time are evidence about it, so the sessions that raised
-a question never support the answer drawn from them, and a run over new
-journals and a replay of the whole history agree. A revision takes over at
-its own birth (section 15.5).
+Every belief has a birth time: the session it came from for a lesson or
+ruling, otherwise the moment it was written; and an end: its successor's
+birth, or a person retiring it. No journal after the end is evidence about
+it (its successor's, if it applies). An independent restatement counts
+whenever it happened, before the birth included, except from the records a
+belief was drawn from: a research belief is never supported by the sessions
+that raised its question or by the answer it came from, and a session that
+was shown one of those records is not independent of it either. A revision
+takes over at its own birth (section 15.5).
 
 The unit of independence is the session (the journal's `session_id`): one
 session, one vote, however many journals it was distilled into. A session
 was shown a belief when the distiller listed it (`beliefs_listed`) or a hook
-injected it into that session (`beliefs_shown`, from the per-session record
-of section 10). A journal is evidence about a belief in these ways, at most
+injected it, or a record it was drawn from, into that session
+(`beliefs_shown`, `records_shown`, from the per-session record of section
+10). A journal is evidence about a belief in these ways, at most
 one `for` and one `against` per session and belief:
 
 | kind | direction | when |
@@ -691,11 +706,12 @@ on a belief (`belief retire`, `belief stale`) are also appended to
 keeps them.
 
 A first observation becomes a hypothesis at once: an item of
-`learn.lesson_sections` that no existing belief covers becomes a new belief
-(`origin: lessons`, or `ruling` from a ruling section), with that journal as
-its first `restated` evidence. Journals are read oldest first, and a run
-stops reading once it has created `learn.max_new` (default 25) beliefs, so a
-long imported history is folded in over several runs, in order.
+`learn.lesson_sections` that no stored or pending belief covers becomes a
+new belief (`origin: lessons`, or `ruling` from a ruling section of a
+person's journal), and that journal is its first `restated` evidence. New
+journals are handled oldest first, and a run stops once it has created
+`learn.max_new` (default 25) beliefs; the rest wait for the next run, which
+only spreads the writes: the derivation is the same either way.
 
 ### 15.5 Revision and revalidation
 
@@ -769,7 +785,10 @@ pass without its signal, and `recurred` (open again) if the signal returns:
 verified means the problem stopped, not that an answer exists.
 
 A research answer is a record of kind `answer` on path `research` (default
-`ask`), tagged as untrusted evidence. Its `Belief` part, when present,
+`ask`), tagged as untrusted evidence, carrying its confidence and its
+proposed `Belief` part, so its effect is the same whenever a person
+approves it. A model that fails to answer leaves no record and no attempt.
+Its `Belief` part, when present,
 becomes a belief (`origin: research`, a hypothesis with no evidence of its
 own: a model's conclusion does not support itself) or, naming a belief it
 revises, a revision; a pinned belief is never revised this way. Only a
