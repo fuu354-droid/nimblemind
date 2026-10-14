@@ -423,6 +423,10 @@ def cmd_flush(args) -> int:
 # ---- config --------------------------------------------------------------
 
 def cmd_trust(args) -> int:
+    # Locations first: a refused one is a config error (exit 2) before a
+    # person is ever asked, as every other command reports it.
+    config_mod.paths.user_config()
+    config_mod.paths.data_home()
     # Normalized, never resolved: resolving would follow a symlink to another
     # project's file or directory and trust that instead (trust is keyed by
     # the path as found).

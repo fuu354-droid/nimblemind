@@ -64,3 +64,15 @@ def test_f40_1_distill_transcript_joins_the_logical_cwd(tmp_path, monkeypatch):
     monkeypatch.setattr(distill, "distill", lambda cfg, transcript, sid: seen.append(transcript) or "skip")
     assert cli.main(["distill", "--transcript", "../t.jsonl", "--session-id", "s1"]) == 0
     assert seen == [str(tmp_path / "logical" / "t.jsonl")]
+
+
+@pytest.mark.parametrize("var", ["NIMBLEMIND_HOME", "NIMBLEMIND_CONFIG"])
+def test_r5_1_trust_refuses_a_relative_location_before_asking(tmp_path, monkeypatch, var):
+    (tmp_path / ".nimblemind.toml").write_text("[budget]\ntotal_chars = 10\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PWD", str(tmp_path))
+    monkeypatch.setenv(var, "relative-place")
+    asked = []
+    monkeypatch.setattr(cli, "confirm", lambda q: asked.append(q) or "t")
+    assert cli.main(["trust"]) == 2
+    assert asked == []
