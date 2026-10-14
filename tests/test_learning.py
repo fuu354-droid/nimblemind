@@ -1051,3 +1051,15 @@ def test_r2_o6_a_session_shown_the_answer_does_not_restate_its_belief(cfg, user_
         Lessons_learned="- pin compose healthchecks with a start period for compose services")
     learn.run(c)
     assert one(c, "pin compose healthchecks with a start period")["for"] == 0
+
+
+def test_r2_an_answers_belief_is_written_once(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nx\n\n## Confidence\n90\n\n## Belief\n"
+                + draft(statement="pin compose healthchecks with a start period", applies="compose services"))
+    config_mod.set_grant("research", True)
+    c = cfg()
+    _gap(c, "why do compose services fail on the first start")
+    research.run(c, 1)
+    for _ in range(3):
+        learn.run(c)
+    assert len(learn.report(c)) == 1
