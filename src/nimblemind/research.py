@@ -141,16 +141,14 @@ def _one(cfg, item: dict, active) -> dict:
     with learn.locked_state(cfg) as state:
         g = learn._gap_entry(state, rec)
         if answer_state in ("stored", "pending"):
-            g["answers"].append(answer_id)
-            g["confidence"] = parsed["confidence"]
-        confident = answer_state in ("stored", "pending") and parsed["confidence"] >= floor
-        # Only a stored answer, one a person approved or granted, is
-        # evidence or grounds for a belief (section 15.3, 15.6).
-        if answer_state == "stored" and confident:
-            result["belief"] = _apply(cfg, state, rec, parsed, answer_id, about, active)
-        if confident:
-            g["status"] = "answered"
-            g["answered_at"] = learn.stamp()
+            conf = parsed["confidence"]
+            # Only a stored answer, one a person approved or granted, is
+            # grounds for a belief or evidence about one (sections 15.3, 15.6).
+            if answer_state == "stored" and conf >= floor:
+                result["belief"] = _apply(cfg, state, parsed, answer_id, about)
+            saved = writes.canonical(cfg).get(answer_id, cfg.namespace)
+            at = saved.created_at if saved is not None else learn.stamp()
+            learn.apply_answer(cfg, state, rec, answer_id, conf, at, answer_state == "stored")
         else:
             g["attempts"] += 1
             if g["attempts"] >= cfg["curiosity"]["max_attempts"]:
@@ -159,32 +157,28 @@ def _one(cfg, item: dict, active) -> dict:
     return result
 
 
-def _apply(cfg, state, gap_rec, parsed, answer_id: str, about: str, active) -> str:
+def _apply(cfg, state, parsed, answer_id: str, about: str) -> str:
     """What a confident, stored answer does to beliefs: corrects the one it
-    names (never a person's), or adds a hypothesis that has to earn support
-    from independent sessions like any other. It is evidence about the gap's
-    own belief once."""
+    names (never a person's, judged on the state read under the lock, not on
+    what was current when research started), or adds a hypothesis that must
+    earn support from later sessions like any other."""
     statement = parsed["statement"]
-    rev = parsed["revises"]
-    by_bid = {p["bid"]: (r, p, e) for r, p, e in active}
-    target = by_bid.get(rev)
-    if target and target[2].get("pinned"):
-        learn._log(cfg, f"research {answer_id} would revise pinned {target[0].source_id}; not applied")
-        target = None
-    corrects = bool(target) and target[0].source_id == about
-    learn.research_evidence(cfg, state, gap_rec, answer_id, against=corrects)
     if not statement or statement.lower() == "none" or not parsed["applies_when"]:
         return ""
+    rev = parsed["revises"]
+    target = ""
+    if rev:
+        sid = f"belief:{rev}"
+        e = state["beliefs"].get(sid)
+        current = {r.source_id for r, _, _ in learn.applying(cfg, state)}
+        if e is not None and sid in current and sid not in learn._superseded(cfg):
+            if e.get("pinned"):
+                learn._log(cfg, f"research {answer_id} would revise pinned {sid}; not applied")
+            else:
+                target = sid
     new = learn.new_belief(cfg, state, statement, parsed["applies_when"], parsed["not_when"] or "none",
                            origin="revision" if target else "research", evidence=[answer_id],
-                           supersedes=target[0].source_id if target else "")
-    if new and target:
-        old = state["beliefs"].get(target[0].source_id)
-        if old is not None:
-            old["revised"] = True
-            state["beliefs"][new]["evidence"] = [dict(x) for x in old["evidence"] if x["dir"] == "for"]
-            learn._restatus(state, target[0].source_id, learn._superseded(cfg), learn.stamp(), new)
-        learn._restatus(state, new, learn._superseded(cfg), learn.stamp(), answer_id)
+                           supersedes=target)
     return new or ""
 
 

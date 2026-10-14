@@ -63,23 +63,33 @@ def source_id_for(session_id: str) -> str:
     return f"session:{stamp}-{sid}-{full}{secrets.token_hex(2)}"
 
 
-def _listed_beliefs(cfg) -> list[tuple[str, str]]:
-    """(B-id, statement) of the beliefs that apply, within
-    `learn.check_chars`. A broken learning state lists none rather than
+def _listed_beliefs(cfg, session_id: str = "") -> tuple[list[tuple[str, str]], list[str]]:
+    """(B-id, statement) of the beliefs to check, within `learn.check_chars`,
+    and the B-ids the session was shown by the hooks. Checked: the beliefs
+    that apply, plus any other belief the session was shown, in the order
+    session start ranks them. A broken learning state lists none rather than
     losing the journal."""
+    from nimblemind import recall
+
+    shown = sorted(x.removeprefix("belief:") for x in recall.injected(session_id)
+                   if x.startswith("belief:"))
     try:
-        active = learn.applying(cfg)
+        state = learn.load_state(cfg)
+        applies = {r.source_id for r, _, _ in learn.applying(cfg, state)}
+        rows = [(r, p, e) for r, p, e in learn.beliefs(cfg, state)
+                if e["status"] != "retired" and (p["bid"] in shown or r.source_id in applies)]
     except learn.StateError as e:
         _log(cfg, f"belief checks skipped: {e}")
-        return []
+        return [], shown
+    rows.sort(key=lambda x: recall._rank(x[2]))
     out, used = [], 0
-    for _, p, _e in active:
+    for _, p, _e in rows:
         line = len(p["bid"]) + len(p["statement"]) + 4
         if used + line > cfg["learn"]["check_chars"]:
             break
         out.append((p["bid"], p["statement"]))
         used += line
-    return out
+    return out, shown
 
 
 def distill(cfg, transcript_path: str, session_id: str) -> str:
@@ -93,7 +103,7 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
         _log(cfg, f"skip {session_id}: only {turns} human turns")
         return "skip"
 
-    listed = _listed_beliefs(cfg)
+    listed, shown = _listed_beliefs(cfg, session_id)
     system = journal.instructions(cfg, listed)
     extra, text = "", ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -115,6 +125,8 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
     sid = source_id_for(session_id)
     header = f"# Session journal {sid.removeprefix('session:')}\n\n"
     meta = {"session_id": session_id}
+    if shown:
+        meta["beliefs_shown"] = shown
     if listed:
         meta["beliefs_listed"] = [bid for bid, _ in listed]
         checks = learn.belief_checks(text, {bid for bid, _ in listed})

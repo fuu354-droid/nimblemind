@@ -124,7 +124,8 @@ def test_a8_counter_examples_challenge_revise_and_the_next_session_uses_the_revi
     # The next session works from the corrected belief, not the old one.
     block = recall.assemble(c)
     assert new["bid"] in block and old["bid"] not in block
-    assert [b for b, _ in distill._listed_beliefs(c)] == [new["bid"]]
+    assert [b for b, _ in distill._listed_beliefs(c)[0]] == [new["bid"]]
+    assert "revised: verifying" in block
     # The history keeps both versions and why it changed.
     chain = learn.history(c, new["source_id"])
     assert [v["source_id"] for v in chain] == [old["source_id"], new["source_id"]]
@@ -661,3 +662,197 @@ def test_a7_hermes_provider_stub():
     hits = p.search("qdrant start_period")
     assert hits and hits[0]["id"] == saved["source_id"]
     assert p.forget(saved["source_id"]) is True and p.search("qdrant start_period") == []
+
+
+# ---- v0.2.0 round 1 findings ----------------------------------------------
+
+def test_r1_f1_a_belief_shown_by_the_prompt_hook_gets_no_support_from_that_session(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    bid = one(c, L1)["bid"]
+    # The prompt hook showed it to session S2; distill records that.
+    put(c, "session:2", metadata={"session_id": "S2", "beliefs_shown": [bid]}, Lessons_learned=f"- {L1b}")
+    learn.run(c)
+    assert one(c, L1)["for"] == 1
+
+
+def test_r1_f1_distill_records_what_the_hooks_showed(cfg, user_config, fake_model, tmp_path):
+    reply = jtext() + "## Belief checks\n- B-0000aaaa: n/a: nothing relevant\n"
+    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(reply))}\n')
+    c = cfg()
+    _person_belief(c)
+    recall.remember("S9", ["belief:B-0000aaaa", "note:x"])
+    assert distill.distill(c, str(_transcript(tmp_path)), "S9") == "pending"
+    meta = [e for e in writes.pending(c) if e["record"]["kind"] == "journal"][0]["record"]["metadata"]
+    assert meta["beliefs_shown"] == ["B-0000aaaa"]
+
+
+def test_r1_f2_one_session_distilled_twice_is_one_vote(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    for n in (2, 3, 4):
+        put(c, f"session:{n}", metadata={"session_id": "S3"}, Lessons_learned=f"- {L1b}")
+    learn.run(c)
+    assert one(c, L1)["for"] == 2
+
+
+def _person_journal(c, sid, **parts):
+    time.sleep(0.002)
+    assert writes.write(c, "cli", "journal", jtext(**parts), source_id=sid,
+                        approved_by="a-person").state == "stored"
+
+
+def test_r1_f3_a_ruling_never_adopts_a_learned_belief_that_says_the_opposite(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned="- always retry flaky network calls in the deploy script")
+    _person_journal(c, "session:2", Rulings="- never retry flaky network calls in the deploy script")
+    learn.run(c)
+    rows = report(c)
+    learned = rows["always retry flaky network calls in the deploy script"]
+    ruled = rows["never retry flaky network calls in the deploy script"]
+    assert not learned["pinned"] and ruled["pinned"] and ruled["origin"] == "ruling"
+    assert "[yours]: always" not in recall.assemble(c)
+
+
+def test_r1_o7_a_ruling_in_a_granted_journal_is_not_the_persons(cfg, no_model):
+    config_mod.set_grant("distill", True)
+    c = cfg()
+    writes.write(c, "distill", "journal", jtext(Rulings="- ship on fridays"), source_id="session:1")
+    learn.run(c)
+    b = learn.report(c)[0]
+    assert b["origin"] == "lessons" and not b["pinned"]
+
+
+def test_r1_f4_research_rechecks_pinned_under_the_lock(cfg, user_config, fake_model, monkeypatch):
+    c = cfg()
+    for i, text in enumerate([L1, L1b], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    b = one(c, L1)
+    reply = ("## Answer\nx\n\n## Confidence\n90\n\n## Belief\n"
+             + draft(statement="a replacement", applies="always", not_when="none", revises=b["bid"]))
+    _researcher(user_config, fake_model, reply)
+    config_mod.set_grant("research", True)
+    c = cfg()
+    _gap(c, "does it hold", signal="contradiction", evidence=["session:2"], belief=b["source_id"])
+    real = research.model.run
+
+    def run_and_pin(*a, **k):
+        out = real(*a, **k)
+        with learn.locked_state(c) as st:              # a ruling pinned it meanwhile
+            st["beliefs"][b["source_id"]]["pinned"] = True
+        return out
+    monkeypatch.setattr(research.model, "run", run_and_pin)
+    research.run(c, 1)
+    rows = report(c)
+    assert rows[L1]["status"] != "retired" and "a replacement" in rows
+    assert rows["a replacement"]["origin"] == "research" and rows["a replacement"]["supersedes"] == ""
+
+
+def test_r1_f5_reset_replays_retire_revisions_and_research_identically(cfg, reviser, user_config, fake_model):
+    reviser(statement="recall only the unfinished part at session start",
+            applies="resuming the same task", not_when="a different task")
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    old = one(c, L1)
+    put(c, "session:4", metadata={"beliefs_listed": [old["bid"]]}, Pitfalls=COUNTER)
+    learn.run(c)
+    put(c, "session:5", Lessons_learned="- delta echo foxtrot matters")
+    learn.run(c)
+    other = one(c, "delta echo foxtrot matters")
+    learn.retire(c, other["source_id"])
+    n_records = len(learn.stored(c, "belief"))
+
+    def snapshot():
+        return sorted((r["source_id"], r["status"], r["for"], r["against"]) for r in learn.report(c))
+    before = snapshot()
+    hist_before = [len(v["history"]) for v in learn.history(c, old["source_id"])]
+    def transitions():
+        return [[(h["status"], h["cause"]) for h in v["history"]] for v in learn.history(c, old["source_id"])]
+    hb = transitions()
+    assert [s for s, _ in hb[0]] == ["hypothesis", "supported", "challenged", "retired"]
+    learn.run(c, reset_state=True)
+    assert snapshot() == before
+    assert len(learn.stored(c, "belief")) == n_records          # replay writes nothing new
+    assert transitions() == hb and [len(v["history"]) for v in learn.history(c, old["source_id"])] == hist_before
+
+
+def test_r1_f5_reset_replays_gap_lifecycle_from_answers(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nadd start_period\n\n## Confidence\n90\n")
+    for p in ("research", "gap"):
+        config_mod.set_grant(p, True)
+    c = cfg()
+    put(c, "session:1", Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
+    learn.run(c)
+    assert research.run(c, 1)["results"][0]["status"] == "answered"
+    learn.run(c, reset_state=True)
+    g = research.ranked(c)[0]
+    assert g["status"] == "answered" and g["attempts"] == 0
+
+
+def test_r1_f6_ask_mode_revision_is_drafted_once_and_inherits_when_approved(cfg, user_config, fake_model):
+    user_config('[distiller]\ncommand = "argv"\n'
+                f"argv = {toml_list(fake_model(draft(statement='narrower', applies='same task', not_when='other task')))}\n"
+                '[approval]\nlearn = "ask"\n')
+    c = cfg()
+    # Seed an approved hypothesis with support.
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    for e in writes.pending(c):
+        writes.approve(c, e["id"], by="t")
+    learn.run(c, reset_state=True)
+    old = one(c, L1)
+    assert old["for"] == 3
+    put(c, "session:4", metadata={"beliefs_listed": [old["bid"]]}, Pitfalls=COUNTER)
+    for _ in range(3):
+        learn.run(c)
+    pend = [e for e in writes.pending(c) if e["record"]["kind"] == "belief"]
+    assert len(pend) == 1
+    writes.approve(c, pend[0]["id"], by="t")
+    learn.run(c)
+    new = one(c, "narrower")
+    assert new["for"] == 3 and new["verifying"] and one(c, L1)["status"] == "retired"
+
+
+def test_r1_f7_checks_for_beliefs_never_shown_are_ignored(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    sid = one(c, L1)["source_id"]
+    for n in (2, 3, 4):
+        put(c, f"session:{n}", metadata={"belief_checks": {sid: "followed"}}, Unfinished="- x")
+    learn.run(c)
+    assert one(c, L1)["for"] == 1
+
+
+def test_r1_o1_pinned_beliefs_are_never_stale(cfg, no_model):
+    c = cfg()
+    bid = _person_belief(c)
+    put(c, "session:1", Changes="- session start now recalls the newest journal in full differently")
+    learn.run(c)
+    assert one(c, L1)["status"] == "supported"
+    assert learn.mark_stale(c, f"belief:{bid}") is False
+
+
+def test_r1_o4_research_on_a_not_holding_gap_is_not_evidence(cfg, user_config, fake_model):
+    c = cfg()
+    bid = _person_belief(c)
+    _researcher(user_config, fake_model, "## Answer\nit was skipped under time pressure\n\n## Confidence\n90\n")
+    config_mod.set_grant("research", True)
+    c = cfg()
+    _gap(c, "why was it skipped", signal="not-holding", evidence=["session:1"], belief=f"belief:{bid}")
+    learn.run(c)
+    research.run(c, 1)
+    assert one(c, L1)["for"] == 0
+
+
+def test_r1_o5_state_rejects_non_numeric_confidence(cfg):
+    s = learn.empty_state()
+    s["beliefs"]["belief:B-1"] = {"status": "supported", "confidence": "high", "evidence": [], "history": []}
+    with pytest.raises(learn.StateError):
+        learn.validate_state(s)

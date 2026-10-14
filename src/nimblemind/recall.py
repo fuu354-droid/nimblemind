@@ -83,7 +83,7 @@ def _mark(e: dict) -> str:
     st = e["status"]
     if st == "challenged":
         return "challenged: counter-evidence, being revised"
-    if st == "hypothesis" and e.get("origin") == "revision":
+    if learn.is_verifying(e):
         return "revised: verifying"
     if st == "stale":
         return "stale: something it depends on changed"
@@ -99,7 +99,7 @@ def belief_line(p: dict, e: dict) -> str:
 
 
 def _rank(e: dict) -> tuple:
-    urgent = e["status"] == "challenged" or (e["status"] == "hypothesis" and e.get("origin") == "revision")
+    urgent = e["status"] == "challenged" or learn.is_verifying(e)
     return (not urgent, not e.get("pinned"), -e["confidence"])
 
 
