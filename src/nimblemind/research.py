@@ -14,7 +14,6 @@ import subprocess
 
 from nimblemind import learn, model, writes
 from nimblemind.fsutil import LockBusy, file_lock, is_absolute, private_dir, which
-from nimblemind.records import now_iso
 
 READY = ("open", "recurred")
 MAX_EVIDENCE_CHARS = 4000
@@ -30,11 +29,11 @@ Reply in exactly this shape:
 ## Confidence
 <an integer 0-100: how sure you are the conclusion is right>
 
-## Principle
-Statement: <one sentence the agent should follow from now on, or none>
+## Belief
+Statement: <one sentence that should be believed from now on, or none>
 Applies when: <the situation>
 Not when: <the exceptions, or none>
-Revises: <the id of ONE listed principle this replaces, or none>"""
+Revises: <the id of ONE listed belief this corrects, or none>"""
 
 
 def priority(cfg, rec, g: dict) -> float:
@@ -83,7 +82,7 @@ def _parse(text: str) -> dict:
     conf_text = section("Confidence")
     m = re.search(r"\d{1,3}", conf_text)
     conf = min(int(m.group(0)), 100) if m else 0
-    p = section("Principle")
+    p = section("Belief")
     return {"answer": section("Answer"), "confidence": conf,
             "statement": learn._field(p, "Statement"),
             "applies_when": learn._field(p, "Applies when"),
@@ -113,59 +112,80 @@ def _one(cfg, item: dict, active) -> dict:
     rec = item["_rec"]
     gid = rec.source_id.removeprefix("gap:")
     with learn.locked_state(cfg) as state:
-        evidence_ids = list(learn._gap_entry(state, rec)["occurrences"])
+        g = learn._gap_entry(state, rec)
+        evidence_ids = list(g["occurrences"])
+        about = g.get("belief") or ""
     user = [f"Question ({gid}): {item['question']}", "", "Evidence:", _evidence(cfg, evidence_ids) or "(none)"]
     if active:
-        user += ["", "Active principles:"] + [f"- {p['pid']}: {p['statement']}" for _, p in active]
+        user += ["", "Current beliefs:"] + [f"- {p['bid']} [{e['status']}]: {p['statement']}"
+                                            for _, p, e in active]
     spec = cfg["researcher"]
     tools = spec.get("tools") if spec.get("command") == "claude-cli" else None
-    result = {"gap": rec.source_id, "answer": "", "confidence": 0, "principle": ""}
+    result = {"gap": rec.source_id, "answer": "", "confidence": 0, "belief": ""}
     try:
         text = model.run(spec, SYSTEM, "\n".join(user), tools=tools or None).text
         parsed = _parse(text)
     except model.ModelError as e:
         parsed = None
         result["answer"] = f"failed: {e}"
-    stored_answer = False
+    answer_state, answer_id = "", ""
     if parsed and parsed["answer"]:
         content = (f"Untrusted evidence: researched by a model for {gid}; verify before relying on it.\n"
                    f"# Answer to {gid}\nQuestion: {item['question']}\n\n{parsed['answer']}\n")
         r = writes.write(cfg, "research", "answer", content,
                          source_id=f"answer:{gid}-{learn.secrets.token_hex(3)}",
                          metadata={"gap": rec.source_id, "confidence": parsed["confidence"]})
-        result.update(answer=r.state + " " + r.source_id, confidence=parsed["confidence"])
-        stored_answer = r.state in ("stored", "pending")
-        if stored_answer and parsed["statement"] and parsed["statement"].lower() != "none" \
-                and parsed["applies_when"]:
-            rev = parsed["revises"]
-            if rev.lower() in ("", "none") or rev not in {p["pid"] for _, p in active}:
-                rev = ""
-            taken = {x.removeprefix("principle:") for x in
-                     (r2.source_id for r2 in learn.stored(cfg, "principle"))}
-            pid = learn.new_id("P", taken)
-            pr = writes.write(cfg, "learn", "principle",
-                              learn.principle_text(pid, parsed["statement"], parsed["applies_when"],
-                                                   parsed["not_when"] or "none"),
-                              source_id=f"principle:{pid}",
-                              metadata={"evidence": evidence_ids + [r.source_id],
-                                        "origin": "research",
-                                        "supersedes": f"principle:{rev}" if rev else ""})
-            result["principle"] = pr.state + " " + pr.source_id
+        answer_state, answer_id = r.state, r.source_id
+        result.update(answer=f"{r.state} {r.source_id}", confidence=parsed["confidence"])
+    floor = cfg["curiosity"]["confidence_floor"]
     with learn.locked_state(cfg) as state:
         g = learn._gap_entry(state, rec)
-        floor = cfg["curiosity"]["confidence_floor"]
-        if stored_answer:
-            g["answers"].append(result["answer"].split(" ", 1)[1])
+        if answer_state in ("stored", "pending"):
+            g["answers"].append(answer_id)
             g["confidence"] = parsed["confidence"]
-        if stored_answer and parsed["confidence"] >= floor:
+        confident = answer_state in ("stored", "pending") and parsed["confidence"] >= floor
+        # Only a stored answer, one a person approved or granted, is
+        # evidence or grounds for a belief (section 15.3, 15.6).
+        if answer_state == "stored" and confident:
+            result["belief"] = _apply(cfg, state, rec, parsed, answer_id, about, active)
+        if confident:
             g["status"] = "answered"
-            g["answered_at"] = now_iso()
+            g["answered_at"] = learn.stamp()
         else:
             g["attempts"] += 1
             if g["attempts"] >= cfg["curiosity"]["max_attempts"]:
                 g["status"] = "parked"
         result["status"] = g["status"]
     return result
+
+
+def _apply(cfg, state, gap_rec, parsed, answer_id: str, about: str, active) -> str:
+    """What a confident, stored answer does to beliefs: corrects the one it
+    names (never a person's), or adds a hypothesis that has to earn support
+    from independent sessions like any other. It is evidence about the gap's
+    own belief once."""
+    statement = parsed["statement"]
+    rev = parsed["revises"]
+    by_bid = {p["bid"]: (r, p, e) for r, p, e in active}
+    target = by_bid.get(rev)
+    if target and target[2].get("pinned"):
+        learn._log(cfg, f"research {answer_id} would revise pinned {target[0].source_id}; not applied")
+        target = None
+    corrects = bool(target) and target[0].source_id == about
+    learn.research_evidence(cfg, state, gap_rec, answer_id, against=corrects)
+    if not statement or statement.lower() == "none" or not parsed["applies_when"]:
+        return ""
+    new = learn.new_belief(cfg, state, statement, parsed["applies_when"], parsed["not_when"] or "none",
+                           origin="revision" if target else "research", evidence=[answer_id],
+                           supersedes=target[0].source_id if target else "")
+    if new and target:
+        old = state["beliefs"].get(target[0].source_id)
+        if old is not None:
+            old["revised"] = True
+            state["beliefs"][new]["evidence"] = [dict(x) for x in old["evidence"] if x["dir"] == "for"]
+            learn._restatus(state, target[0].source_id, learn._superseded(cfg), learn.stamp(), new)
+        learn._restatus(state, new, learn._superseded(cfg), learn.stamp(), answer_id)
+    return new or ""
 
 
 def _after_run(cfg) -> str:
@@ -195,7 +215,7 @@ def run(cfg, max_gaps: int = 3) -> dict:
             with learn.locked_state(cfg) as state:
                 items = [i for i in ranked(cfg, state) if i["status"] in READY
                          and i["priority"] >= cfg["curiosity"]["min_priority"]]
-            active = learn.active_principles(cfg)
+            active = learn.applying(cfg)
             results = [_one(cfg, i, active) for i in items[:max(max_gaps, 0)]]
     except LockBusy:
         return {"state": "busy", "results": []}

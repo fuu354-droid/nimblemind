@@ -245,7 +245,8 @@ def write(cfg, path: str, kind: str, content: str, *, source_id: str = "",
     if approved_by:
         by = approved_by
     else:
-        by, rule = cfg.approval_source(path), "allow"
+        by = cfg.approval_source(path)
+        rule = "auto" if by.startswith("auto:") else "allow"
     detail = _commit(cfg, rec, path=path, by=by, rule=rule)
     _log(cfg, f"ok {path} {namespace} {source_id} ({rule})" + (f"; {detail}" if detail else ""))
     return WriteResult(STORED, source_id, detail)

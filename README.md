@@ -2,12 +2,10 @@
 
 Session memory that learns, for AI coding agents. At the end of a session it
 distills the transcript into a short journal; at the start of the next one it
-injects where you left off. Across sessions it notices what keeps going
-wrong, asks why, researches the questions worth asking, and proposes working
-principles that you approve before they apply; then it checks whether they
-actually changed what happens. It runs with no server and no database, on Linux, macOS
-and Windows, and nothing it stores bypasses an isolation check and your
-approval.
+injects where you left off. Across sessions, every journal is evidence for or
+against what it already believes: beliefs gain confidence from independent
+sessions, lose it to counter-examples, get revised when they stop holding,
+and the next session works from the corrected version.
 
 - **Zero infrastructure.** The default backend is plain files under your data
   directory. A [memila](https://github.com/fuu354-droid/memila) instance, or
@@ -79,42 +77,48 @@ nimblemind config                  # effective config and where files live
 `--json` gives machine-readable output on the read commands.
 
 Other tools can use it as their memory through `nimblemind.api` (`store`,
-`recall`, `delete`, `gaps_add`, `gaps_list`, `principles_list`); their
+`recall`, `delete`, `gaps_add`, `gaps_list`, `beliefs_list`); their
 writes go through the same isolation check and approval, on the `provider`
 path. `integrations/hermes/provider.py` is a worked example.
 
 ## The learning loop
 
 ```
-nimblemind learn                   # journals -> questions (gaps) and principles
-nimblemind gap list                # questions, by priority
-nimblemind gap add "why does X keep failing" --impact 4
-nimblemind research --max 3        # research the highest priority questions
-nimblemind principle list          # what it has learned (approved only)
-nimblemind principle report        # is each principle holding?
+nimblemind belief list             # what it believes, how sure, and why
+nimblemind belief history <id>     # every version of a belief and what changed it
+nimblemind belief add --statement "..." --applies-when "..."   # your own: never overridden
+nimblemind belief stale <id>       # something it depends on changed
+nimblemind learn                   # fold new journals into beliefs (also runs at session end)
+nimblemind gap list                # the questions worth checking, by priority
+nimblemind research --max 3        # research the top questions
 ```
 
-- **It notices.** A pitfall that recurs across journals, a result that
-  differed from what was expected (the journal's `Surprises`), and a
-  principle that exists but was not followed each become a question,
-  worded by a fixed template, never by a model.
-- **It asks what matters.** Questions rank by impact (how often and how
-  badly) raised by uncertainty and divided by cost, not by uncertainty
-  alone. Research stops on a confident answer or after two tries, and a
-  parked question waits for new evidence.
-- **It proposes, you decide.** A lesson that recurs, or a ruling you made
-  once, becomes a principle with a scope (`Applies when`, `Not when`). It
-  waits in `pending` until you approve it; approving is what makes it apply.
-  A revision names the principle it replaces.
-- **It checks itself.** Each journal records whether the session followed
-  or violated each principle. `principle report` shows the counts before and
-  after a principle became active, and a principle that is known but not
-  followed is flagged and raised as a question of its own. A question is
+- **A first observation is a hypothesis.** A lesson from one session is
+  recorded with its source and is not yet trusted at session start.
+- **Only independent evidence counts.** Another session reaching the same
+  lesson on its own supports it; a session that was shown the belief and
+  repeats it does not, and neither does the model's own research conclusion.
+  One session is one vote.
+- **Counter-examples count double.** When a belief applied and the problem
+  it addresses happened anyway, its confidence drops; once challenged it is
+  rewritten under narrower conditions (`Applies when`, `Not when`), the old
+  version is retired with its history kept, and the next session gets the
+  revision.
+- **Change makes it stale.** A journal's `Changes` (a new version, a new
+  requirement) marks related beliefs for revalidation.
+- **Your word stands.** A belief you added, or a ruling you made, is never
+  weakened, revised or retired by experience; evidence against it becomes a
+  question for you.
+- **Confidence is not authority.** Beliefs are context. Nothing reads them to
+  decide approval, isolation or any other permission.
+- **Curiosity asks what matters.** Contradictions, beliefs that applied but
+  were not followed, surprises and recurring pitfalls become questions,
+  ranked by impact over cost rather than by uncertainty alone. A question is
   only `verified` once the problem stops recurring after its answer.
 
-At session start the block holds the active principles and the newest
-journal's `Unfinished` section; the prompt hook adds principles and records
-that match what you just asked, once per session.
+Belief updates are automatic and audited (`approved_by: auto:learn`); set
+`approval.learn = "ask"` to review each one. Research answers and new
+questions wait for your approval by default.
 
 ## Configuration
 

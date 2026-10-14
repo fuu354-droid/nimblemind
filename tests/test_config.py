@@ -16,7 +16,9 @@ def project(tmp_path, text):
 def test_defaults_without_any_file(tmp_path):
     c = config_mod.load(tmp_path)
     assert c.namespace == "default"
-    assert set(c["approval"].values()) == {"ask"}
+    # Every path asks by default, except learn (DESIGN.md section 15.1).
+    assert {p: v for p, v in c["approval"].items() if p != "learn"} == dict.fromkeys(
+        [p for p in c["approval"] if p != "learn"], "ask") and c["approval"]["learn"] == "allow"
     assert c.project_file is None
 
 

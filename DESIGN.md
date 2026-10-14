@@ -635,7 +635,7 @@ independence: one session, one vote):
 | `restated` | for | an item of `learn.lesson_sections` is similar to the belief, and the belief was not listed to that session's distiller (a session that was shown the belief and repeats it is not independent) |
 | `outcome` | for | the session's `Belief checks` say `followed` and no pitfall or surprise of that session is similar to the belief |
 | `counter` | against | the belief was listed to the session (it applied) and a pitfall or surprise of that session is similar to it: it was in force and the problem it addresses happened anyway |
-| `research` | for or against | a research answer at or above `confidence_floor` for a gap about the belief: against when the answer revises it, for otherwise; one per gap |
+| `research` | for or against | a stored research answer (one a person approved or granted) at or above `confidence_floor` for a gap about the belief: against when the answer revises it, for otherwise; one per gap |
 
 `violated` in `Belief checks` is not evidence about whether the belief is
 right. It means the belief was not applied, which raises the `not-holding`
@@ -672,9 +672,9 @@ prints the chain of versions and their transitions.
 A first observation becomes a hypothesis at once: an item of
 `learn.lesson_sections` that no existing belief covers becomes a new belief
 (`origin: lessons`, or `ruling` from a ruling section), with that journal as
-its first `restated` evidence. At most `learn.max_new` (default 5) per run,
-from the newest journals first, so a long imported history cannot flood the
-store at once; the rest are reconsidered on the next run.
+its first `restated` evidence. Journals are read oldest first, and a run
+stops reading once it has created `learn.max_new` (default 25) beliefs, so a
+long imported history is folded in over several runs, in order.
 
 ### 15.5 Revision and revalidation
 
@@ -747,8 +747,11 @@ verified means the problem stopped, not that an answer exists.
 
 A research answer is a record of kind `answer` on path `research` (default
 `ask`), tagged as untrusted evidence. Its `Belief` part, when present,
-becomes a belief (`origin: research`) or, naming a belief it revises, a
-revision; it also counts as `research` evidence (section 15.3).
+becomes a belief (`origin: research`, a hypothesis with no evidence of its
+own: a model's conclusion does not support itself) or, naming a belief it
+revises, a revision; a pinned belief is never revised this way. Only a
+stored answer does any of this, and it also counts as `research` evidence
+(section 15.3).
 
 `curiosity.after_run` lets a trusted project run its own notification after
 `research`.

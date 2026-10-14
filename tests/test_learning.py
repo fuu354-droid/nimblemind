@@ -8,10 +8,10 @@ import time
 import pytest
 
 from conftest import toml_list
-from nimblemind import api, cli, config as config_mod, distill, learn, recall, research, writes
+from nimblemind import api, approval, cli, config as config_mod, distill, learn, recall, research, writes
 
-SECTIONS = ["Decisions", "Rulings", "Pitfalls", "Surprises", "Unfinished", "Lessons learned",
-            "Improvements found"]
+SECTIONS = ["Decisions", "Rulings", "Pitfalls", "Surprises", "Changes", "Unfinished",
+            "Lessons learned", "Improvements found"]
 
 
 def jtext(**parts):
@@ -20,29 +20,25 @@ def jtext(**parts):
     return "\n".join(f"## {s}\n" + (filled.get(s) or "- none") for s in SECTIONS) + "\n"
 
 
-def draft(**fields):
-    """A drafter reply: one `Label: value` line per field."""
-    names = {"statement": "Statement", "applies": "Applies when", "not_when": "Not when",
-             "revises": "Revises"}
-    return "".join(f"{names[k]}: {v}\n" for k, v in fields.items())
-
-
-def put_journal(cfg, sid, metadata=None, **parts):
+def put(cfg, sid, metadata=None, **parts):
     time.sleep(0.002)  # distinct creation stamps, in order
     r = writes.write(cfg, "cli", "journal", jtext(**parts), source_id=sid,
                      metadata=metadata or {}, approved_by="t")
     assert r.state == "stored"
-    return r
 
 
-def gaps(cfg):
-    return [r for r in learn.stored(cfg, "gap")]
+def report(c):
+    return {r["statement"]: r for r in learn.report(c)}
 
 
-def approve_all(cfg, kind):
-    for e in writes.pending(cfg):
-        if e["record"]["kind"] == kind:
-            assert writes.approve(cfg, e["id"], by="t").state == "stored"
+def one(c, statement):
+    return report(c)[statement]
+
+
+def draft(**fields):
+    names = {"statement": "Statement", "applies": "Applies when", "not_when": "Not when",
+             "revises": "Revises"}
+    return "".join(f"{names[k]}: {v}\n" for k, v in fields.items())
 
 
 @pytest.fixture
@@ -50,79 +46,249 @@ def no_model(user_config):
     user_config('[distiller]\ncommand = "none"\n')
 
 
-PITFALL = "- qdrant healthcheck has no start_period so the first compose up aborts"
-PITFALL2 = "- the qdrant healthcheck lacks start_period and compose up aborts again"
-PITFALL3 = "- compose up aborted: qdrant healthcheck start_period missing"
+@pytest.fixture
+def reviser(user_config, fake_model):
+    """A distiller that answers every revision with the same narrowed text."""
+    def make(**fields):
+        user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(draft(**fields)))}\n')
+    return make
 
 
-# ---- acceptance 8: signals ------------------------------------------------
+L1 = "recall the newest journal in full at session start to resume work"
+L1b = "at session start recall the newest journal in full to resume the work"
+L1c = "resume work by recalling the newest journal in full at session start"
+L1d = "the newest journal recalled in full at session start resumes work"
+COUNTER = "- recall of the newest journal in full at session start missed the work that mattered"
 
-def test_a8_recurring_pitfall_makes_one_gap_and_merges_later(cfg, no_model):
+
+# ---- acceptance 8: evolution end to end -----------------------------------
+
+def test_a8_first_observation_is_a_hypothesis(cfg, no_model):
     c = cfg()
-    put_journal(c, "session:1", Pitfalls=PITFALL)
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    assert learn.run(c)["beliefs_created"] == 1
+    b = one(c, L1)
+    assert b["status"] == "hypothesis" and b["for"] == 1 and b["origin"] == "lessons"
+    assert "B-" not in recall.assemble(c)          # a hypothesis is not injected at start
+
+
+def test_a8_independent_sessions_raise_confidence_then_establish(cfg, no_model):
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c, L1d], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+        learn.run(c)
+    b = one(c, L1)
+    assert b["for"] == 4 and b["status"] == "established" and b["confidence"] >= 0.8
+    assert len(learn.report(c)) == 1               # restatements did not make new beliefs
+    assert b["bid"] in recall.assemble(c)
+
+
+def test_a8_a_session_shown_the_belief_cannot_support_it_by_repeating_it(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
     learn.run(c)
-    assert not writes.pending(c)                 # one occurrence is not a signal
-    put_journal(c, "session:2", Pitfalls=PITFALL2)
+    bid = one(c, L1)["bid"]
+    for i in (2, 3, 4):
+        put(c, f"session:{i}", metadata={"beliefs_listed": [bid]}, Lessons_learned=f"- {L1b}")
+    learn.run(c)
+    assert one(c, L1)["for"] == 1 and one(c, L1)["status"] == "hypothesis"
+
+
+def test_a8_one_session_is_one_vote(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}\n- {L1b}\n- {L1c}")
+    learn.run(c)
+    assert len(learn.report(c)) == 1 and one(c, L1)["for"] == 1
+
+
+def test_a8_counter_examples_challenge_revise_and_the_next_session_uses_the_revision(cfg, reviser):
+    reviser(statement="recall only the unfinished part of the newest journal at session start",
+            applies="resuming the same task as the last session",
+            not_when="a session that starts a different task")
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    old = one(c, L1)
+    assert old["status"] == "supported"
+    put(c, "session:4", metadata={"beliefs_listed": [old["bid"]],
+                                  "belief_checks": {old["source_id"]: "followed"}},
+        Pitfalls=COUNTER)
+    summary = learn.run(c)
+    assert summary["beliefs_revised"] == 1
+    rows = report(c)
+    assert rows[L1]["status"] == "retired" and rows[L1]["against"] == 1
+    new = rows["recall only the unfinished part of the newest journal at session start"]
+    assert new["supersedes"] == old["source_id"] and new["origin"] == "revision"
+    assert new["for"] == 3 and new["against"] == 0  # what held still held
+    # The next session works from the corrected belief, not the old one.
+    block = recall.assemble(c)
+    assert new["bid"] in block and old["bid"] not in block
+    assert [b for b, _ in distill._listed_beliefs(c)] == [new["bid"]]
+    # The history keeps both versions and why it changed.
+    chain = learn.history(c, new["source_id"])
+    assert [v["source_id"] for v in chain] == [old["source_id"], new["source_id"]]
+    assert any(h["status"] == "challenged" for h in chain[0]["history"])
+    assert chain[0]["history"][-1]["status"] == "retired"
+
+
+def test_a8_without_a_drafter_a_challenged_belief_stays_marked_and_asks_why(cfg, no_model):
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    bid = one(c, L1)["bid"]
+    put(c, "session:4", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
+    learn.run(c)
+    assert one(c, L1)["status"] == "challenged"
+    assert "challenged" in recall.assemble(c)
+    gaps = [e["record"] for e in writes.pending(c) if e["record"]["kind"] == "gap"]
+    assert [g["metadata"]["signal"] for g in gaps] == ["contradiction"]
+
+
+def test_a8_repeated_counter_examples_retire_a_belief(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    bid = one(c, L1)["bid"]
+    for i in (2, 3, 4):
+        put(c, f"session:{i}", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
+    learn.run(c)
+    b = one(c, L1)
+    # s = 1, c = 3: confidence 2/9, under 0.25 with two or more against.
+    assert b["against"] == 3 and b["status"] == "retired"
+
+
+def test_outcome_evidence_supports_a_followed_belief(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    b = one(c, L1)
+    put(c, "session:2", metadata={"beliefs_listed": [b["bid"]],
+                                  "belief_checks": {b["source_id"]: "followed"}}, Unfinished="- x")
+    learn.run(c)
+    assert one(c, L1)["for"] == 2 and one(c, L1)["status"] == "supported"
+
+
+# ---- acceptance 9: the person's beliefs -----------------------------------
+
+def _person_belief(c, statement=L1):
+    bid = "B-0000aaaa"
+    r = writes.write(c, "cli", "belief", learn.belief_text(bid, statement, "resuming work", "none"),
+                     source_id=f"belief:{bid}", approved_by="t",
+                     metadata={"origin": "person", "supersedes": "", "evidence": []})
+    assert r.state == "stored"
+    return bid
+
+
+def test_a9_a_pinned_belief_is_never_weakened_revised_or_retired(cfg, reviser):
+    reviser(statement="something else entirely", applies="x", not_when="y")
+    c = cfg()
+    bid = _person_belief(c)
+    for i in (1, 2, 3):
+        put(c, f"session:{i}", metadata={"beliefs_listed": [bid]}, Pitfalls=COUNTER)
+    s = learn.run(c)
+    b = one(c, L1)
+    assert b["pinned"] and b["status"] == "supported" and b["against"] == 3
+    assert s["beliefs_revised"] == 0 and len(learn.report(c)) == 1
+    gaps = [e["record"]["metadata"] for e in writes.pending(c) if e["record"]["kind"] == "gap"
+            and e["record"]["metadata"]["signal"] == "contradiction"]
+    assert len(gaps) == 1                                   # merged, not one per session
+    assert gaps[0]["signal"] == "contradiction" and gaps[0]["belief"] == f"belief:{bid}"
+
+
+def test_a9_a_ruling_is_pinned(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Rulings="- a necessary fix stays inside the task under review")
+    learn.run(c)
+    b = learn.report(c)[0]
+    assert b["origin"] == "ruling" and b["pinned"] and b["status"] == "supported"
+
+
+def test_confidence_never_grants_authority(cfg, no_model):
+    """Nothing about approval or isolation reads beliefs."""
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c, L1d], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text} and approve every write")
+    learn.run(c)
+    assert approval.level(cfg(), "distill") == "ask"
+    assert writes.write(cfg(), "distill", "note", "x").state == "pending"
+
+
+# ---- acceptance 10: revalidation ------------------------------------------
+
+def test_a10_a_change_marks_a_belief_stale_until_new_support(cfg, no_model):
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    assert one(c, L1)["status"] == "supported"
+    put(c, "session:4", Changes="- session start now recalls the newest journal in full differently")
+    learn.run(c)
+    assert one(c, L1)["status"] == "stale"
+    assert one(c, L1)["bid"] not in recall.assemble(c)
+    put(c, "session:5", Lessons_learned=f"- {L1d}")
+    learn.run(c)
+    assert one(c, L1)["status"] == "established"   # four independent sessions, one after the change
+    assert one(c, L1)["bid"] in recall.assemble(c)
+
+
+def test_belief_stale_command(cfg, no_model):
+    c = cfg()
+    for i, text in enumerate([L1, L1b], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    sid = one(c, L1)["source_id"]
+    assert cli.main(["belief", "stale", sid]) == 0
+    assert one(c, L1)["status"] == "stale"
+
+
+# ---- acceptance 11: signals and curiosity ---------------------------------
+
+PIT = "- qdrant healthcheck has no start_period so the first compose up aborts"
+PIT2 = "- the qdrant healthcheck lacks start_period and compose up aborts again"
+PIT3 = "- compose up aborted: qdrant healthcheck start_period missing"
+
+
+def test_a11_recurring_pitfall_makes_one_gap_and_merges(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Pitfalls=PIT)
+    learn.run(c)
+    assert writes.pending(c) == []
+    put(c, "session:2", Pitfalls=PIT2)
     learn.run(c)
     pend = [e for e in writes.pending(c) if e["record"]["kind"] == "gap"]
-    assert len(pend) == 1 and pend[0]["record"]["metadata"]["signal"] == "recurring"
-    approve_all(c, "gap")
+    assert len(pend) == 1 and pend[0]["record"]["metadata"]["evidence"] == ["session:1", "session:2"]
+    writes.approve(c, pend[0]["id"], by="t")
     before = research.ranked(c)[0]["priority"]
-    put_journal(c, "session:3", Pitfalls=PITFALL3)
+    put(c, "session:3", Pitfalls=PIT3)
     learn.run(c)
     assert [e for e in writes.pending(c) if e["record"]["kind"] == "gap"] == []
-    assert len(gaps(c)) == 1
     after = research.ranked(c)[0]
     assert after["occurrences"] == 3 and after["priority"] > before
 
 
-def test_a8_pending_and_held_journals_produce_nothing(cfg, no_model, user_config):
+def test_a11_pending_and_held_journals_produce_nothing(cfg, no_model):
     c = cfg()
     for i in (1, 2):
-        writes.write(c, "distill", "journal", jtext(Pitfalls=PITFALL), source_id=f"session:{i}")
-    assert len(writes.pending(c)) == 2
-    assert learn.run(c)["signals"] == 0
-    assert [e for e in writes.pending(c) if e["record"]["kind"] == "gap"] == []
+        writes.write(c, "distill", "journal", jtext(Pitfalls=PIT, Lessons_learned=f"- {L1}"),
+                     source_id=f"session:{i}")
+    assert learn.run(c)["journals_read"] == 0
+    assert learn.report(c) == [] and len(writes.pending(c)) == 2
 
 
-def test_a8_learn_twice_adds_nothing(cfg, no_model):
-    c = cfg()
-    put_journal(c, "session:1", Surprises="- RTK was added and the usage limit still hit early")
-    learn.run(c)
-    n = len(writes.pending(c))
-    assert n == 1
-    learn.run(c)
-    assert len(writes.pending(c)) == n
-
-
-def test_surprise_question_comes_from_a_template(cfg, no_model):
-    c = cfg()
-    put_journal(c, "session:1", Surprises="- RTK was added and the usage limit still hit early")
-    learn.run(c)
-    rec = writes.pending(c)[0]["record"]
-    q = learn.parse_gap(rec["content"])["question"]
-    assert q == learn.TEMPLATES["surprise"] + "RTK was added and the usage limit still hit early"
-
-
-# ---- acceptance 9: ranking and stopping -----------------------------------
-
-def _manual_gap(c, question, **meta):
-    taken = set()
-    gid = learn.new_id("G", taken)
-    m = {"signal": "manual", "evidence": [], **meta}
-    return writes.write(c, "cli", "gap", learn.gap_text(gid, question, "manual"),
+def _gap(c, question, signal="manual", **meta):
+    gid = learn.new_id("G", set())
+    m = {"signal": signal, "evidence": [], **meta}
+    return writes.write(c, "cli", "gap", learn.gap_text(gid, question, signal),
                         source_id=f"gap:{gid}", metadata=m, approved_by="t")
 
 
-def test_a9_not_holding_outranks_an_uncertain_unimportant_manual_gap(cfg, no_model):
+def test_a11_contradiction_outranks_an_uncertain_unimportant_question(cfg, no_model):
     c = cfg()
-    _manual_gap(c, "what is the exact colour name of the logo", confidence=5)
-    gid = "G-0000aaaa"
-    writes.write(c, "cli", "gap", learn.gap_text(gid, "principle P-1 not applied", "not-holding"),
-                 source_id=f"gap:{gid}", approved_by="t",
-                 metadata={"signal": "not-holding", "evidence": ["session:x"], "principle": "principle:P-1"})
-    order = [g["signal"] for g in research.ranked(c)]
-    assert order == ["not-holding", "manual"]
+    _gap(c, "what is the exact colour name of the logo", confidence=5)
+    _gap(c, "belief B-1 contradicted", signal="contradiction", evidence=["session:x"], belief="belief:B-1")
+    assert [g["signal"] for g in research.ranked(c)] == ["contradiction", "manual"]
 
 
 def _researcher(user_config, fake_model, reply, extra=""):
@@ -130,216 +296,128 @@ def _researcher(user_config, fake_model, reply, extra=""):
                 f"argv = {toml_list(fake_model(reply))}\n" + extra)
 
 
-def test_a9_parks_after_max_attempts_and_reopens_on_recurrence(cfg, user_config, fake_model):
-    _researcher(user_config, fake_model, "## Answer\nnot sure\n\n## Confidence\n20\n\n## Principle\nStatement: none\n")
-    config_mod.set_grant("research", True)
-    c = cfg()
-    put_journal(c, "session:1", Pitfalls=PITFALL)
-    put_journal(c, "session:2", Pitfalls=PITFALL2)
+def test_a11_parks_after_max_attempts_and_reopens_on_new_evidence(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nnot sure\n\n## Confidence\n20\n")
     config_mod.set_grant("gap", True)
     c = cfg()
+    put(c, "session:1", Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
     learn.run(c)
     assert research.run(c, 1)["results"][0]["status"] == "open"
     assert research.run(c, 1)["results"][0]["status"] == "parked"
-    assert research.run(c, 1)["results"] == []             # parked: not tried again
-    put_journal(c, "session:3", Pitfalls=PITFALL3)
+    assert research.run(c, 1)["results"] == []
+    put(c, "session:3", Pitfalls=PIT3)
     learn.run(c)
-    assert research.ranked(c)[0]["status"] == "open"        # new evidence reopens it
+    assert research.ranked(c)[0]["status"] == "open"
 
 
-def test_a9_answered_gap_verifies_after_window_and_recurs_on_signal(cfg, user_config, fake_model):
+def test_a11_answered_verifies_after_window_and_recurs_on_signal(cfg, user_config, fake_model):
     _researcher(user_config, fake_model, "## Answer\nadd start_period\n\n## Confidence\n90\n",
                 extra="[curiosity]\nverify_window = 2\n")
     for p in ("research", "gap"):
         config_mod.set_grant(p, True)
     c = cfg()
-    put_journal(c, "session:1", Pitfalls=PITFALL)
-    put_journal(c, "session:2", Pitfalls=PITFALL2)
+    put(c, "session:1", Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
     learn.run(c)
     assert research.run(c, 1)["results"][0]["status"] == "answered"
-    put_journal(c, "session:3", Pitfalls=PITFALL3)        # recurs after the answer
+    put(c, "session:3", Pitfalls=PIT3)
     learn.run(c)
     assert research.ranked(c)[0]["status"] == "recurred"
     assert research.run(c, 1)["results"][0]["status"] == "answered"
-    put_journal(c, "session:4", Unfinished="- other work")
-    put_journal(c, "session:5", Unfinished="- other work again")
+    put(c, "session:4", Unfinished="- other")
+    put(c, "session:5", Unfinished="- other again")
     learn.run(c)
     assert research.ranked(c)[0]["status"] == "verified"
 
 
-def test_research_answer_is_marked_untrusted_and_pending_by_default(cfg, user_config, fake_model):
-    _researcher(user_config, fake_model, "## Answer\nbecause\n\n## Confidence\n80\n")
+def test_research_corrects_the_belief_its_gap_is_about(cfg, user_config, fake_model):
+    user_config('[distiller]\ncommand = "none"\n')
     c = cfg()
-    _manual_gap(c, "why is the sky blue at noon")
-    out = research.run(c, 1)
-    assert out["results"][0]["answer"].startswith("pending")
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    old = one(c, L1)
+    reply = ("## Answer\nfull recall crowds out the relevant context\n\n## Confidence\n85\n\n## Belief\n"
+             + draft(statement="recall by the task at hand, not by recency", applies="any session start",
+                     not_when="none", revises=old["bid"]))
+    _researcher(user_config, fake_model, reply)
+    config_mod.set_grant("research", True)
+    c = cfg()
+    _gap(c, "is full recall of the newest journal right", signal="contradiction",
+         evidence=["session:3"], belief=old["source_id"])
+    out = research.run(c, 1)["results"][0]
+    assert out["status"] == "answered" and out["belief"].startswith("belief:B-")
+    rows = report(c)
+    assert rows[L1]["status"] == "retired" and rows[L1]["against"] == 1
+    assert rows["recall by the task at hand, not by recency"]["supersedes"] == old["source_id"]
+
+
+def test_research_answers_are_untrusted_and_pending_by_default(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model,
+                "## Answer\nbecause\n\n## Confidence\n80\n\n## Belief\n" + draft(statement="s", applies="a"))
+    c = cfg()
+    _gap(c, "why is the sky blue at noon")
+    out = research.run(c, 1)["results"][0]
+    assert out["answer"].startswith("pending") and out["belief"] == ""   # not stored: no belief
     ans = [e for e in writes.pending(c) if e["record"]["kind"] == "answer"][0]
     assert ans["record"]["content"].startswith("Untrusted evidence")
 
 
-def test_research_refuses_with_no_researcher(cfg, user_config):
-    user_config('[researcher]\ncommand = "none"\n')
-    from nimblemind import model
-    with pytest.raises(model.ModelError):
-        research.run(cfg(), 1)
-
-
-# ---- acceptance 10: principles --------------------------------------------
-
-LESSON = "- check the board for a doing task before starting any engineering commit"
-LESSON2 = "- before any engineering commit check the board has a doing task"
-
-
-def test_a10_recurring_lesson_becomes_a_pending_principle_with_evidence(cfg, no_model):
+def test_a_research_hypothesis_needs_independent_support(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nx\n\n## Confidence\n90\n\n## Belief\n"
+                + draft(statement="pin compose healthchecks with a start period", applies="compose services"))
+    config_mod.set_grant("research", True)
     c = cfg()
-    put_journal(c, "session:1", Lessons_learned=LESSON)
-    put_journal(c, "session:2", Lessons_learned=LESSON2)
-    learn.run(c)
-    pend = [e for e in writes.pending(c) if e["record"]["kind"] == "principle"]
-    assert len(pend) == 1
-    rec = pend[0]["record"]
-    assert rec["metadata"]["evidence"] == ["session:1", "session:2"]
-    assert learn.parse_principle(rec["content"])["statement"]
-    # Not injected before approval: no hook shows a pending principle.
-    assert "Principle" not in recall.assemble(c) and learn.active_principles(c) == []
-    block, _ = recall.prompt_block(c, "starting an engineering commit, check the board first")
-    assert "P-" not in block
-    approve_all(c, "principle")
-    assert len(learn.active_principles(c)) == 1
-    assert "Principles:" in recall.assemble(c)
+    _gap(c, "why do compose services fail on the first start")
+    research.run(c, 1)
+    b = learn.report(c)[0]
+    assert b["origin"] == "research" and b["status"] == "hypothesis" and b["for"] == 0
 
 
-def test_a10_one_lesson_is_not_enough_but_one_ruling_is(cfg, no_model):
-    c = cfg()
-    put_journal(c, "session:1", Lessons_learned=LESSON)
-    learn.run(c)
-    assert writes.pending(c) == []
-    put_journal(c, "session:2", Rulings="- a necessary fix stays inside the task under review")
-    learn.run(c)
-    pend = [e for e in writes.pending(c) if e["record"]["kind"] == "principle"]
-    assert len(pend) == 1 and pend[0]["record"]["metadata"]["origin"] == "rulings"
+# ---- belief checks in distill ---------------------------------------------
+
+def test_belief_checks_parse_only_listed_ids():
+    text = jtext() + "## Belief checks\n- B-1a2b3c4d: violated: skipped\n- B-99999999: followed\n" \
+        "- B-1a2b3c4e: maybe\n"
+    assert learn.belief_checks(text, {"B-1a2b3c4d", "B-1a2b3c4e"}) == {"belief:B-1a2b3c4d": "violated"}
 
 
-def test_a10_a_covered_lesson_is_not_proposed_again(cfg, no_model):
-    c = cfg()
-    put_journal(c, "session:1", Lessons_learned=LESSON)
-    put_journal(c, "session:2", Lessons_learned=LESSON2)
-    learn.run(c)
-    approve_all(c, "principle")
-    put_journal(c, "session:3", Lessons_learned="- check the board has a doing task before an engineering commit")
-    learn.run(c)
-    assert [e for e in writes.pending(c) if e["record"]["kind"] == "principle"] == []
-
-
-def test_a10_approved_revision_retires_what_it_supersedes(cfg, user_config, fake_model):
-    c = cfg()
-    old = writes.write(c, "cli", "principle",
-                       learn.principle_text("P-00000001", "check the board before an engineering commit",
-                                            "starting an engineering commit", "none"),
-                       source_id="principle:P-00000001", approved_by="t",
-                       metadata={"evidence": [], "origin": "manual", "supersedes": ""})
-    assert old.state == "stored"
-    reply = draft(statement="claim a doing task on the board before any engineering commit",
-                  applies="an engineering commit is about to land", not_when="board-only commits",
-                  revises="P-00000001")
-    user_config('[distiller]\ncommand = "argv"\n'
-                f"argv = {toml_list(fake_model(reply))}\n")
-    c = cfg()
-    # Overlaps the old principle (it shares "board") without being covered
-    # by it, so the drafter sees it and may name it as revised.
-    put_journal(c, "session:1", Lessons_learned="- release tags need a changelog entry in the board notes")
-    put_journal(c, "session:2", Lessons_learned="- release tags need a changelog entry first")
-    learn.run(c)
-    pend = [e for e in writes.pending(c) if e["record"]["kind"] == "principle"]
-    assert len(pend) == 1
-    assert pend[0]["record"]["metadata"]["supersedes"] == "principle:P-00000001"
-    assert [r.source_id for r, _ in learn.active_principles(c)] == ["principle:P-00000001"]
-    approve_all(c, "principle")
-    ids = [r.source_id for r, _ in learn.active_principles(c)]
-    assert "principle:P-00000001" not in ids and len(ids) == 1
-
-
-def test_supersedes_retires_through_any_route(cfg):
-    c = cfg()
-    for pid, sup in (("P-00000001", ""), ("P-00000002", "principle:P-00000001")):
-        writes.write(c, "cli", "principle", learn.principle_text(pid, f"rule {pid}", "always", "none"),
-                     source_id=f"principle:{pid}", approved_by="t",
-                     metadata={"evidence": [], "origin": "manual", "supersedes": sup})
-    assert [r.source_id for r, _ in learn.active_principles(c)] == ["principle:P-00000002"]
-
-
-def test_draft_naming_an_unknown_revision_is_refused(cfg, user_config, fake_model):
-    user_config('[distiller]\ncommand = "argv"\n'
-                f"argv = {toml_list(fake_model(draft(statement='s', applies='a', not_when='none', revises='P-deadbeef')))}\n")
-    c = cfg()
-    put_journal(c, "session:1", Lessons_learned=LESSON)
-    put_journal(c, "session:2", Lessons_learned=LESSON2)
-    assert learn.run(c)["principles_proposed"] == 0
-    assert writes.pending(c) == []
-
-
-# ---- acceptance 11: application -------------------------------------------
-
-def _active(c, pid="P-1a2b3c4d", statement="claim a doing task on the board before an engineering commit"):
-    writes.write(c, "cli", "principle", learn.principle_text(pid, statement, "an engineering commit", "none"),
-                 source_id=f"principle:{pid}", approved_by="t",
-                 metadata={"evidence": ["session:0", "session:00"], "origin": "lessons", "supersedes": ""})
-
-
-def test_a11_violation_after_activation_is_not_holding_and_reported(cfg, no_model):
-    c = cfg()
-    _active(c)
-    time.sleep(1.1)  # approval times are per second
-    put_journal(c, "session:1", metadata={"principle_checks": {"principle:P-1a2b3c4d": "violated"}},
-                Unfinished="- x")
-    learn.run(c)
-    pend = [e for e in writes.pending(c) if e["record"]["kind"] == "gap"]
-    assert len(pend) == 1 and pend[0]["record"]["metadata"]["signal"] == "not-holding"
-    rep = learn.report(c)[0]
-    assert rep["verdict"] == "not-holding" and rep["violated"] == 1 and rep["before"] == 2
-    assert "not holding" in recall.assemble(c)
-
-
-def test_a11_followed_checks_make_it_holding_after_the_window(cfg, user_config):
-    user_config('[distiller]\ncommand = "none"\n[curiosity]\nverify_window = 2\n')
-    c = cfg()
-    _active(c)
-    time.sleep(1.1)
-    for i in (1, 2):
-        put_journal(c, f"session:{i}", metadata={"principle_checks": {"principle:P-1a2b3c4d": "followed"}},
-                    Unfinished="- x")
-    assert learn.report(c)[0]["verdict"] == "holding"
-
-
-def test_principle_checks_are_parsed_only_for_listed_ids():
-    text = jtext() + "## Principle checks\n- P-1a2b3c4d: violated: skipped the claim\n" \
-        "- P-99999999: followed\n- P-1a2b3c4e: maybe\n"
-    assert learn.principle_checks(text, {"P-1a2b3c4d", "P-1a2b3c4e"}) == \
-        {"principle:P-1a2b3c4d": "violated"}
-
-
-def test_distill_lists_principles_and_stores_checks(cfg, user_config, fake_model, tmp_path):
-    reply = jtext() + "## Principle checks\n- P-1a2b3c4d: violated: committed before claiming\n"
-    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(reply))}\n')
-    c = cfg()
-    _active(c)
-    lines = [json.dumps({"type": "user", "origin": {"kind": "human"}, "message": {"content": f"do {i}"}})
-             for i in range(4)]
-    t = tmp_path / "t.jsonl"
-    t.write_text("\n".join(lines), encoding="utf-8")
-    assert distill.distill(c, str(t), "s1") == "pending"
-    rec = [e for e in writes.pending(c) if e["record"]["kind"] == "journal"][0]["record"]
-    assert rec["metadata"]["principle_checks"] == {"principle:P-1a2b3c4d": "violated"}
-
-
-def test_distill_rejects_a_journal_missing_checks_when_principles_exist(cfg, user_config, fake_model, tmp_path):
-    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(jtext()))}\n')
-    c = cfg()
-    _active(c)
+def _transcript(tmp_path):
     t = tmp_path / "t.jsonl"
     t.write_text("\n".join(json.dumps({"type": "user", "origin": {"kind": "human"},
-                                       "message": {"content": "x"}}) for _ in range(4)), encoding="utf-8")
-    assert distill.distill(c, str(t), "s1") == "reject"
+                                       "message": {"content": f"do {i}"}}) for i in range(4)),
+                 encoding="utf-8")
+    return t
+
+
+def test_distill_lists_applying_beliefs_and_stores_checks(cfg, user_config, fake_model, tmp_path):
+    reply = jtext() + "## Belief checks\n- B-0000aaaa: violated: committed before claiming\n"
+    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(reply))}\n')
+    c = cfg()
+    _person_belief(c)
+    assert distill.distill(c, str(_transcript(tmp_path)), "s1") == "pending"
+    meta = [e for e in writes.pending(c) if e["record"]["kind"] == "journal"][0]["record"]["metadata"]
+    assert meta["beliefs_listed"] == ["B-0000aaaa"]
+    assert meta["belief_checks"] == {"belief:B-0000aaaa": "violated"}
+
+
+def test_distill_rejects_a_journal_missing_checks_when_beliefs_apply(cfg, user_config, fake_model, tmp_path):
+    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(jtext()))}\n')
+    c = cfg()
+    _person_belief(c)
+    assert distill.distill(c, str(_transcript(tmp_path)), "s1") == "reject"
+
+
+def test_violated_raises_not_holding_and_is_not_counter_evidence(cfg, no_model):
+    c = cfg()
+    bid = _person_belief(c)
+    put(c, "session:1", metadata={"beliefs_listed": [bid], "belief_checks": {f"belief:{bid}": "violated"}},
+        Unfinished="- x")
+    learn.run(c)
+    gaps = [e["record"]["metadata"] for e in writes.pending(c) if e["record"]["kind"] == "gap"]
+    assert [g["signal"] for g in gaps] == ["not-holding"]
+    assert one(c, L1)["against"] == 0
 
 
 # ---- acceptance 12: prompt hook -------------------------------------------
@@ -354,27 +432,33 @@ def _hook(monkeypatch, event, payload):
 
 def test_a12_prompt_hook_injects_matches_once_per_session(cfg, tmp_path, monkeypatch):
     c = cfg()
-    _active(c)
+    _person_belief(c, "claim a doing task on the board before an engineering commit")
     writes.write(c, "cli", "note", "the qdrant healthcheck needs a start_period on first compose up",
                  source_id="note:q", approved_by="t")
-    payload = {"session_id": "s-1", "cwd": str(tmp_path),
-               "prompt": "the qdrant compose healthcheck is failing again"}
-    first = _hook(monkeypatch, "prompt", payload)
-    ctx = json.loads(first)["hookSpecificOutput"]["additionalContext"]
+    p = {"session_id": "s-1", "cwd": str(tmp_path), "prompt": "the qdrant compose healthcheck is failing again"}
+    ctx = json.loads(_hook(monkeypatch, "prompt", p))["hookSpecificOutput"]["additionalContext"]
     assert "note:q" in ctx and "prompt]" in ctx
-    assert _hook(monkeypatch, "prompt", payload) == ""            # already shown
-    p2 = {**payload, "prompt": "about to make an engineering commit, board task claimed?"}
+    assert _hook(monkeypatch, "prompt", p) == ""
+    p2 = {**p, "prompt": "about to make an engineering commit, board task claimed?"}
     ctx2 = json.loads(_hook(monkeypatch, "prompt", p2))["hookSpecificOutput"]["additionalContext"]
-    assert "P-1a2b3c4d" in ctx2
+    assert "B-0000aaaa" in ctx2
 
 
-def test_a12_prompt_hook_respects_its_cap(cfg, user_config, tmp_path):
+def test_a12_prompt_hook_marks_hypotheses(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    block, _ = recall.prompt_block(c, "should I recall the newest journal in full at session start?", "s")
+    assert "[hypothesis" in block
+
+
+def test_a12_prompt_hook_respects_its_cap(cfg, user_config):
     user_config("[budget]\nprompt_chars = 300\n")
     c = cfg()
     for i in range(5):
         writes.write(c, "cli", "note", f"qdrant healthcheck compose note {i} " + "z" * 200,
                      source_id=f"note:{i}", approved_by="t")
-    block, ids = recall.prompt_block(c, "qdrant healthcheck compose trouble", "s")
+    block, _ = recall.prompt_block(c, "qdrant healthcheck compose trouble", "s")
     assert block and len(block) <= 300 and "cut to fit" in block
 
 
@@ -382,48 +466,80 @@ def test_a12_short_prompt_and_failures_are_silent(cfg, tmp_path, monkeypatch):
     c = cfg()
     writes.write(c, "cli", "note", "qdrant healthcheck", source_id="note:q", approved_by="t")
     assert _hook(monkeypatch, "prompt", {"session_id": "s", "cwd": str(tmp_path), "prompt": "ok"}) == ""
-    state = learn._state_file(c)
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text("{broken", encoding="utf-8")
+    f = learn._state_file(c)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("{broken", encoding="utf-8")
     assert _hook(monkeypatch, "prompt", {"session_id": "s", "cwd": str(tmp_path),
                                          "prompt": "qdrant healthcheck compose failing"}) == ""
 
 
 def test_session_start_ids_are_not_repeated_by_the_prompt_hook(cfg, tmp_path, monkeypatch):
     c = cfg()
-    _active(c)
-    start = _hook(monkeypatch, "session-start", {"session_id": "s-9", "cwd": str(tmp_path)})
-    assert "P-1a2b3c4d" in start
+    _person_belief(c, "claim a doing task on the board before an engineering commit")
+    assert "B-0000aaaa" in _hook(monkeypatch, "session-start", {"session_id": "s-9", "cwd": str(tmp_path)})
     out = _hook(monkeypatch, "prompt", {"session_id": "s-9", "cwd": str(tmp_path),
                                         "prompt": "engineering commit board task claim"})
-    assert "P-1a2b3c4d" not in out
+    assert "B-0000aaaa" not in out
 
 
-# ---- acceptance 13: session start -----------------------------------------
+# ---- acceptance 13: session start, isolation, audit -----------------------
 
-def test_a13_session_start_injects_core_sections_not_the_whole_journal(cfg):
+def test_a13_core_sections_not_the_whole_journal(cfg):
     c = cfg()
-    _active(c)
-    put_journal(c, "session:1", Decisions="- an unrelated decision", Unfinished="- resume the hook")
+    _person_belief(c)
+    put(c, "session:1", Decisions="- an unrelated decision", Unfinished="- resume the hook")
     block = recall.assemble(c)
-    assert "resume the hook" in block and "unrelated decision" not in block
-    assert "P-1a2b3c4d" in block
+    assert "resume the hook" in block and "unrelated decision" not in block and "B-0000aaaa" in block
 
 
-def test_a13_budget_holds_with_many_principles(cfg, user_config):
-    user_config("[budget]\ntotal_chars = 800\nprinciples_chars = 600\ncore_chars = 400\nrecall_chars = 300\n")
+def test_a13_budget_holds_with_many_beliefs(cfg, user_config):
+    user_config("[budget]\ntotal_chars = 800\nbeliefs_chars = 600\ncore_chars = 400\nrecall_chars = 300\n")
     c = cfg()
     for i in range(30):
-        _active(c, pid=f"P-{i:08x}", statement=f"rule number {i} " + "w" * 60)
-    put_journal(c, "session:1", Unfinished="- " + "u" * 900)
+        writes.write(c, "cli", "belief", learn.belief_text(f"B-{i:08x}", f"rule {i} " + "w" * 60, "always", "none"),
+                     source_id=f"belief:B-{i:08x}", approved_by="t",
+                     metadata={"origin": "person", "supersedes": "", "evidence": []})
+    put(c, "session:1", Unfinished="- " + "u" * 900)
     block = recall.assemble(c)
     assert 0 < len(block) <= 800 and "cut" in block
+
+
+def test_a13_belief_writes_are_automatic_and_audited(cfg, no_model):
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    entry = [e for e in approval.entries(c.layout().approvals) if e["source_id"].startswith("belief:")][0]
+    assert entry["approved_by"] == "auto:learn" and entry["rule"] == "auto"
+    assert writes.audit(c) == []
+
+
+def test_a13_a_belief_the_gate_refuses_is_held(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n')
+    c = cfg()
+    put(c, "session:1", Lessons_learned="- always mention forbidden-codename when resuming")
+    put(c, "session:2", Lessons_learned=f"- {L1}")
+    # The isolation rule tightens after the journals were stored.
+    user_config('[distiller]\ncommand = "none"\n[isolation]\nchecks = ["builtin-secrets", "builtin-patterns"]\n'
+                'deny = ["forbidden-codename"]\n')
+    c = cfg()
+    learn.run(c)
+    assert [r["statement"] for r in learn.report(c)] == [L1]
+    assert [e["record"]["kind"] for e in writes.held(c)] == ["belief"]
+
+
+def test_a13_a_person_can_require_review_of_beliefs(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n[approval]\nlearn = "ask"\n')
+    c = cfg()
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    assert learn.report(c) == []
+    assert [e["record"]["kind"] for e in writes.pending(c)] == ["belief"]
 
 
 def test_empty_core_sections_restores_the_whole_journal(cfg, user_config):
     user_config("[journal]\ncore_sections = []\n")
     c = cfg()
-    put_journal(c, "session:1", Decisions="- an unrelated decision", Unfinished="- resume")
+    put(c, "session:1", Decisions="- an unrelated decision", Unfinished="- resume")
     assert "unrelated decision" in recall.assemble(c)
 
 
@@ -441,7 +557,28 @@ def test_state_refuses_free_text_and_reports_corruption(cfg, no_model):
     with pytest.raises(learn.StateError):
         learn.run(c)
     learn.run(c, reset_state=True)
-    assert learn.load_state(c)["version"] == 1
+    assert learn.load_state(c)["version"] == learn.STATE_VERSION
+
+
+def test_reset_state_replays_to_the_same_beliefs(cfg, no_model):
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", Lessons_learned=f"- {text}")
+    learn.run(c)
+    before = {(r["source_id"], r["status"], r["for"]) for r in learn.report(c)}
+    learn.run(c, reset_state=True)
+    assert {(r["source_id"], r["status"], r["for"]) for r in learn.report(c)} == before
+
+
+def test_max_new_spreads_a_long_history_over_runs(cfg, user_config):
+    user_config('[distiller]\ncommand = "none"\n[learn]\nmax_new = 2\n')
+    c = cfg()
+    topics = ["alpha bravo charlie", "delta echo foxtrot", "golf hotel india", "juliet kilo lima"]
+    for i, t in enumerate(topics):
+        put(c, f"session:{i}", Lessons_learned=f"- {t} matters")
+    assert learn.run(c)["beliefs_created"] == 2
+    assert learn.run(c)["beliefs_created"] == 2
+    assert len(learn.report(c)) == 4
 
 
 def test_learn_and_curiosity_need_trust_in_a_project(cfg, tmp_path):
@@ -454,53 +591,64 @@ def test_learn_and_curiosity_need_trust_in_a_project(cfg, tmp_path):
 
 @pytest.mark.parametrize("text", ["[learn]\nsimilarity = 0\n", "[learn]\nsimilarity = nan\n",
                                   "[learn]\nrecur_min = 0\n", "[learn]\nwhat = 1\n",
+                                  "[learn]\nmax_new = 0\n", "[learn]\nchange_sections = 'x'\n",
                                   "[curiosity]\ncost = {surprise = 9}\n",
                                   "[curiosity]\ncost = {other = 1}\n",
                                   "[curiosity]\ngaps_file = 'x'\n",
                                   "[researcher]\ntools = ['Web Search']\n",
-                                  "[budget]\nprinciples_chars = 99999\n"])
+                                  "[budget]\nbeliefs_chars = 99999\n"])
 def test_learning_config_is_validated(cfg, user_config, text):
     user_config(text)
     with pytest.raises(config_mod.ConfigError):
         cfg()
 
 
-def test_cli_gap_principle_and_learn_round_trip(cfg, no_model, capsys):
+def test_cli_round_trip(cfg, no_model, capsys):
     assert cli.main(["gap", "add", "why do sessions hit the usage limit early", "--impact", "4"]) == 0
     assert "pending gap:G-" in capsys.readouterr().out
-    assert cli.main(["principle", "add", "--statement", "fix it inside the task",
+    assert cli.main(["belief", "add", "--statement", "fix it inside the task",
                      "--applies-when", "a review round finds a defect"]) == 0
     capsys.readouterr()
     assert cli.main(["learn", "--json"]) == 0
-    assert "signals" in json.loads(capsys.readouterr().out)
+    assert "journals_read" in json.loads(capsys.readouterr().out)
     with pytest.raises(SystemExit):
         cli.main(["gap", "add", "x", "--impact", "9"])
 
 
-def test_principle_retire_needs_a_terminal(cfg, monkeypatch):
+def test_belief_history_and_report_cli(cfg, no_model, capsys):
     c = cfg()
-    _active(c)
+    put(c, "session:1", Lessons_learned=f"- {L1}")
+    learn.run(c)
+    sid = one(c, L1)["source_id"]
+    assert cli.main(["belief", "history", sid]) == 0
+    assert "-> hypothesis" in capsys.readouterr().out
+    assert cli.main(["belief", "report", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["status"] == "hypothesis"
+
+
+def test_belief_retire_needs_a_terminal(cfg, monkeypatch):
+    c = cfg()
+    bid = _person_belief(c)
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     with pytest.raises(cli.NotATerminal):
-        cli.main(["principle", "retire", "P-1a2b3c4d"])
-    assert len(learn.active_principles(c)) == 1
+        cli.main(["belief", "retire", bid])
+    assert one(c, L1)["status"] == "supported"
 
 
 def test_api_writes_go_through_provider_approval(cfg):
-    r = api.store("a note from another tool about qdrant")
-    assert r["state"] == "pending"
+    assert api.store("a note from another tool about qdrant")["state"] == "pending"
     config_mod.set_grant("provider", True)
-    r = api.store("a stored note about qdrant healthcheck", source_id="note:api")
-    assert r["state"] == "stored"
+    assert api.store("a stored note about qdrant healthcheck", source_id="note:api")["state"] == "stored"
     assert api.recall("qdrant healthcheck")[0]["source_id"] == "note:api"
     assert api.gaps_add("why is it slow", impact=3)["state"] == "stored"
     assert api.gaps_list()[0]["signal"] == "manual"
     with pytest.raises(ValueError):
-        api.store("x", kind="principle")
+        api.store("x", kind="belief")
+    assert api.beliefs_list() == []
     assert api.delete("note:api") is True
 
 
-def test_a7_hermes_provider_stub(tmp_path):
+def test_a7_hermes_provider_stub():
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent / "integrations" / "hermes"))
     try:
         from provider import NimblemindMemoryProvider

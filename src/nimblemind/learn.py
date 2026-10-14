@@ -517,8 +517,8 @@ def new_belief(cfg, state, statement: str, applies: str, not_when: str, *, origi
 
 
 def _evidence_from(cfg, state, j: Record, live: list[tuple[str, dict]]):
-    """Section 15.3 for one journal against the beliefs that existed before
-    it. Returns (signals, lesson items no belief covers)."""
+    """Section 15.3 for one journal against the beliefs not retired.
+    Returns (signals, lesson items no belief covers)."""
     lr = cfg["learn"]
     th = lr["similarity"]
     meta = j.metadata if isinstance(j.metadata, dict) else {}
@@ -656,9 +656,12 @@ def _run(cfg, state) -> dict:
             continue
         if created >= lr["max_new"]:
             break          # the rest of the history waits for the next run, in order
+        # Every belief not retired, whenever it was written: a session that
+        # restated it independently supports it whether it came before or
+        # after the belief was formed, and the other kinds of evidence need
+        # the belief listed to that session, so they cannot predate it.
         live = [(sid, p) for sid, (r, p) in parsed.items()
-                if sid not in superseded and state["beliefs"][sid]["status"] != "retired"
-                and not after(r.created_at, j.created_at)]
+                if sid not in superseded and state["beliefs"][sid]["status"] != "retired"]
         found, fresh = _evidence_from(cfg, state, j, live)
         signals += found + _pitfall_signals(cfg, j, journals, pit_tokens)
         for sec, item in fresh:

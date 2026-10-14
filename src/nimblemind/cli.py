@@ -493,7 +493,7 @@ def cmd_research(args) -> int:
     except (model.ModelError, learn.StateError) as e:
         raise SystemExit(f"research: {e}") from None
     lines = [f"{r['gap']}: {r.get('status', '?')} (confidence {r['confidence']}) {r['answer']}"
-             + (f"; principle {r['principle']}" if r.get("principle") else "")
+             + (f"; belief {r['belief']}" if r.get("belief") else "")
              for r in out["results"]]
     if out["state"] == "busy":
         lines = ["another research run holds the lock"]
@@ -553,50 +553,64 @@ def cmd_gap(args) -> int:
     return 0 if r.state in ("stored", "pending") else 1
 
 
-def cmd_principle(args) -> int:
+def cmd_belief(args) -> int:
     from nimblemind import learn, writes
 
     cfg = _cfg(args)
+    sid = ""
+    if args.id:
+        sid = args.id if args.id.startswith("belief:") else f"belief:{args.id}"
     try:
-        if args.action == "list":
-            active = learn.active_principles(cfg)
-            rows = [{"source_id": r.source_id, **p, "metadata": r.metadata} for r, p in active]
-            _out(args, rows, "\n".join(f"{p['pid']}: {p['statement']} (applies when: "
-                                       f"{p['applies_when']}; not when: {p['not_when']})"
-                                       for _, p in active) or "(no active principles)")
-            return 0
-        if args.action == "report":
+        if args.action in ("list", "report"):
             rows = learn.report(cfg)
+            if args.action == "list" and not args.all:
+                rows = [r for r in rows if r["status"] != "retired"]
             _out(args, rows, "\n".join(
-                f"{r['pid']}  {r['verdict']:<11} before {r['before']}  after {r['after']}  "
-                f"followed {r['followed']}  violated {r['violated']}  "
-                f"journals since {r['journals_since']}  {r['statement']}" for r in rows)
-                or "(no active principles)")
+                f"{r['bid']}  {r['status']:<11} {r['confidence']:.2f}  for {r['for']}  "
+                f"against {r['against']}{'  pinned' if r['pinned'] else ''}  {r['statement']}"
+                + (f" (applies when: {r['applies_when']}; not when: {r['not_when']})"
+                   if args.action == "report" else "")
+                for r in rows) or "(no beliefs)")
+            return 0
+        if args.action == "history":
+            if not sid:
+                raise SystemExit("belief history needs an id")
+            chain = learn.history(cfg, sid)
+            if not chain:
+                raise SystemExit(f"no belief {sid}")
+            lines = []
+            for v in chain:
+                lines.append(f"{v['source_id']}  {v['status']}: {v['statement']} "
+                             f"(applies when: {v['applies_when']}; not when: {v['not_when']})")
+                lines += [f"    {h['at']}  -> {h['status']}  ({h['cause']})" for h in v["history"]]
+            _out(args, chain, "\n".join(lines))
             return 0
     except learn.StateError as e:
-        raise SystemExit(f"principle {args.action}: {e}") from None
-    if args.action == "retire":
-        if not args.id:
-            raise SystemExit("principle retire needs an id")
-        sid = args.id if args.id.startswith("principle:") else f"principle:{args.id}"
-        if not any(r.source_id == sid for r, _ in learn.active_principles(cfg)):
-            raise SystemExit(f"no active principle {sid}")
-        confirm(f"Retire {sid}? It stops being injected and checked.")
-        learn.retire(cfg, sid)
-        say(f"retired {sid}")
+        raise SystemExit(f"belief {args.action}: {e}") from None
+    if args.action in ("retire", "stale"):
+        if not sid:
+            raise SystemExit(f"belief {args.action} needs an id")
+        if args.action == "retire":
+            confirm(f"Retire {sid}? It stops being injected and checked.")
+            ok = learn.retire(cfg, sid)
+        else:
+            ok = learn.mark_stale(cfg, sid)
+        if not ok:
+            raise SystemExit(f"no belief {sid} that can be changed")
+        say(f"{args.action}d {sid}")
         return 0
     if not args.statement or not args.statement.strip():
-        raise SystemExit("principle add needs --statement")
-    taken = {r.source_id.removeprefix("principle:") for r in learn.stored(cfg, "principle")}
-    pid = learn.new_id("P", taken)
-    content = learn.principle_text(pid, args.statement, args.applies_when or "",
-                                   args.not_when or "")
+        raise SystemExit("belief add needs --statement")
+    taken = {r.source_id.removeprefix("belief:") for r in learn.stored(cfg, "belief")}
+    bid = learn.new_id("B", taken)
+    content = learn.belief_text(bid, args.statement, args.applies_when or "", args.not_when or "")
     try:
-        r = writes.write(cfg, "cli", "principle", content, source_id=f"principle:{pid}",
-                         metadata={"evidence": [], "origin": "manual", "supersedes": ""},
-                         confirm=_approver(args, "principle"))
+        # A person's belief: pinned, never revised or retired by the loop.
+        r = writes.write(cfg, "cli", "belief", content, source_id=f"belief:{bid}",
+                         metadata={"origin": "person", "supersedes": "", "evidence": []},
+                         confirm=_approver(args, "belief"))
     except ValueError as e:
-        raise SystemExit(f"principle add: {e}") from None
+        raise SystemExit(f"belief add: {e}") from None
     _out(args, r.__dict__, f"{r.state} {r.source_id}" + (f": {r.detail}" if r.detail else ""))
     return 0 if r.state in ("stored", "pending") else 1
 
@@ -716,7 +730,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     common(sub.add_parser("config", help="show the effective config and locations")).set_defaults(fn=cmd_config)
 
-    ln = common(sub.add_parser("learn", help="turn stored journals into gaps and principles"))
+    ln = common(sub.add_parser("learn", help="update beliefs and questions from stored journals"))
     ln.add_argument("--reset-state", action="store_true",
                     help="rebuild the learning state from the stored records")
     ln.set_defaults(fn=cmd_learn)
@@ -735,14 +749,15 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--approve", action="store_true", help="approve now (needs a terminal)")
     g.set_defaults(fn=cmd_gap)
 
-    pr = common(sub.add_parser("principle", help="what the loop has learned"))
-    pr.add_argument("action", choices=["list", "report", "add", "retire"])
-    pr.add_argument("id", nargs="?")
-    pr.add_argument("--statement")
-    pr.add_argument("--applies-when")
-    pr.add_argument("--not-when")
-    pr.add_argument("--approve", action="store_true", help="approve now (needs a terminal)")
-    pr.set_defaults(fn=cmd_principle)
+    bl = common(sub.add_parser("belief", help="what it believes, how sure, and why"))
+    bl.add_argument("action", choices=["list", "report", "history", "add", "retire", "stale"])
+    bl.add_argument("id", nargs="?")
+    bl.add_argument("--statement")
+    bl.add_argument("--applies-when")
+    bl.add_argument("--not-when")
+    bl.add_argument("--all", action="store_true", help="include retired beliefs")
+    bl.add_argument("--approve", action="store_true", help="approve now (needs a terminal)")
+    bl.set_defaults(fn=cmd_belief)
 
     m = common(sub.add_parser("migrate", help="import from an older on-disk layout"), json_flag=False)
     m.add_argument("source", nargs="?")

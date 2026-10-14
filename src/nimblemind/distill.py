@@ -63,21 +63,21 @@ def source_id_for(session_id: str) -> str:
     return f"session:{stamp}-{sid}-{full}{secrets.token_hex(2)}"
 
 
-def _listed_principles(cfg) -> list[tuple[str, str]]:
-    """(P-id, statement) of active principles, newest first, within
+def _listed_beliefs(cfg) -> list[tuple[str, str]]:
+    """(B-id, statement) of the beliefs that apply, within
     `learn.check_chars`. A broken learning state lists none rather than
     losing the journal."""
     try:
-        active = learn.active_principles(cfg)
+        active = learn.applying(cfg)
     except learn.StateError as e:
-        _log(cfg, f"principle checks skipped: {e}")
+        _log(cfg, f"belief checks skipped: {e}")
         return []
     out, used = [], 0
-    for _, p in active:
-        line = len(p["pid"]) + len(p["statement"]) + 4
+    for _, p, _e in active:
+        line = len(p["bid"]) + len(p["statement"]) + 4
         if used + line > cfg["learn"]["check_chars"]:
             break
-        out.append((p["pid"], p["statement"]))
+        out.append((p["bid"], p["statement"]))
         used += line
     return out
 
@@ -93,7 +93,7 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
         _log(cfg, f"skip {session_id}: only {turns} human turns")
         return "skip"
 
-    listed = _listed_principles(cfg)
+    listed = _listed_beliefs(cfg)
     system = journal.instructions(cfg, listed)
     extra, text = "", ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -115,9 +115,11 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
     sid = source_id_for(session_id)
     header = f"# Session journal {sid.removeprefix('session:')}\n\n"
     meta = {"session_id": session_id}
-    checks = learn.principle_checks(text, {pid for pid, _ in listed})
-    if checks:
-        meta["principle_checks"] = checks
+    if listed:
+        meta["beliefs_listed"] = [bid for bid, _ in listed]
+        checks = learn.belief_checks(text, {bid for bid, _ in listed})
+        if checks:
+            meta["belief_checks"] = checks
     result = writes.write(cfg, "distill", "journal", header + text.strip() + "\n",
                           source_id=sid, metadata=meta)
     _log(cfg, f"{result.state} {session_id}: {sid}" + (f" ({result.detail})" if result.detail else ""))

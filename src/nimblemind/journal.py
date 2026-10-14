@@ -18,12 +18,12 @@ def headers(cfg) -> list[str]:
     return [f"## {s}" for s in cfg["journal"]["sections"]]
 
 
-CHECKS = "Principle checks"
+CHECKS = "Belief checks"
 
 
-def instructions(cfg, principles: list[tuple[str, str]] | None = None) -> str:
-    """The distiller's instructions. `principles` is (P-id, statement) for
-    every active principle to be checked (DESIGN.md section 15.7)."""
+def instructions(cfg, beliefs: list[tuple[str, str]] | None = None) -> str:
+    """The distiller's instructions. `beliefs` is (B-id, statement) for
+    every belief that applied to the session (DESIGN.md section 15.7)."""
     j = cfg["journal"]
     lines = [
         "You are a session distiller. Below is a condensed transcript of an AI coding",
@@ -32,7 +32,7 @@ def instructions(cfg, principles: list[tuple[str, str]] | None = None) -> str:
         "but keep every header):",
         "",
         *headers(cfg),
-        *([f"## {CHECKS}"] if principles else []),
+        *([f"## {CHECKS}"] if beliefs else []),
         "",
         "Rules:",
         "- Unfinished = concrete next steps a fresh session needs to resume.",
@@ -42,13 +42,16 @@ def instructions(cfg, principles: list[tuple[str, str]] | None = None) -> str:
         lines.append("- Surprises = where a result differed from what was expected: a fix that did "
                      "not fix, a check that passed while the thing failed, a cost or limit that "
                      "did not move. State what was expected and what happened.")
-    if principles:
-        lines.append(f"- {CHECKS}: one line per principle below, `- <id>: followed`, "
+    if "Changes" in j["sections"]:
+        lines.append("- Changes = what changed in the environment, a tool or library version, a "
+                     "dependency or a requirement during the session.")
+    if beliefs:
+        lines.append(f"- {CHECKS}: one line per belief below, `- <id>: followed`, "
                      "`- <id>: violated` or `- <id>: n/a`, then a colon and the evidence from "
-                     "the session. Use violated when the session did what the principle forbids "
-                     "or skipped what it requires, even if it was corrected later.")
-        lines.append("Principles:")
-        lines += [f"  {pid}: {statement}" for pid, statement in principles]
+                     "the session. Use violated when the session did what the belief advises "
+                     "against or skipped what it requires, even if it was corrected later.")
+        lines.append("Beliefs:")
+        lines += [f"  {bid}: {statement}" for bid, statement in beliefs]
     if j.get("language"):
         lines.append(f"- Write in {j['language']} only, whatever language the transcript is in.")
     if j.get("banned_chars"):
@@ -66,7 +69,7 @@ def _is_english_rule(language: str) -> bool:
 
 def problems(cfg, text: str, checks: bool = False) -> list[str]:
     """Everything wrong with a journal that can be named without a model.
-    `checks`: principles were listed, so their section is required too."""
+    `checks`: beliefs were listed, so their section is required too."""
     j = cfg["journal"]
     out = []
     banned = sorted({c for c in text if c in set(j.get("banned_chars") or [])})

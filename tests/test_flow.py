@@ -15,7 +15,7 @@ from nimblemind.backends import BackendError
 from nimblemind.records import Record
 from conftest import toml_list
 
-SECTIONS = ["Decisions", "Rulings", "Pitfalls", "Surprises", "Unfinished", "Lessons learned",
+SECTIONS = ["Decisions", "Rulings", "Pitfalls", "Surprises", "Changes", "Unfinished", "Lessons learned",
             "Improvements found"]
 
 

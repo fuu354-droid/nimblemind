@@ -49,7 +49,7 @@ DEFAULTS: dict = {
     "researcher": {"command": "claude-cli", "model": "sonnet", "argv": [], "timeout": 900.0,
                    "tools": ["WebSearch", "WebFetch"]},
     "journal": {
-        "sections": ["Decisions", "Rulings", "Pitfalls", "Surprises", "Unfinished",
+        "sections": ["Decisions", "Rulings", "Pitfalls", "Surprises", "Changes", "Unfinished",
                      "Lessons learned", "Improvements found"],
         "recall_sections": ["Unfinished", "Pitfalls"],
         "core_sections": ["Unfinished"],
@@ -59,10 +59,12 @@ DEFAULTS: dict = {
         "banned_chars": [],
         "instructions": "",
     },
-    "budget": {"total_chars": 6000, "principles_chars": 1200, "core_chars": 2500,
+    "budget": {"total_chars": 6000, "beliefs_chars": 1200, "core_chars": 2500,
                "recall_chars": 2000, "prompt_chars": 3000, "recall_k": 3, "prompt_k": 3,
                "prompt_min_tokens": 3},
-    "approval": {p: "ask" for p in APPROVAL_PATHS},
+    # Every path asks by default except `learn`: revising beliefs as
+    # evidence arrives is the point of the loop (DESIGN.md section 15.1).
+    "approval": {p: ("allow" if p == "learn" else "ask") for p in APPROVAL_PATHS},
     "isolation": {"checks": ["builtin-secrets"], "deny": [], "identity": {},
                   "command": [], "project_command": [], "timeout": 60.0},
     "learn": {
@@ -70,19 +72,20 @@ DEFAULTS: dict = {
         "similarity": 0.35,
         "recur_min": 2,
         "match_min": 2,
+        "max_new": 25,
         "pitfall_sections": ["Pitfalls"],
         "surprise_sections": ["Surprises"],
         "lesson_sections": ["Lessons learned", "Rulings"],
         "ruling_sections": ["Rulings"],
+        "change_sections": ["Changes"],
         "check_chars": 1500,
-        "stale_after": 20,
     },
     "curiosity": {
         "confidence_floor": 70.0,
         "min_priority": 1.0,
         "max_attempts": 2,
         "verify_window": 5,
-        "cost": {"recurring": 1, "not-holding": 1, "surprise": 2, "manual": 2},
+        "cost": {"contradiction": 1, "not-holding": 1, "recurring": 1, "surprise": 2, "manual": 2},
         "after_run": [],
     },
 }
@@ -124,6 +127,8 @@ class Config:
     def approval_source(self, path: str) -> str:
         """Where an `allow` for `path` came from, for the approval log: only
         ever the grants file (see `grants_file`)."""
+        if path == "learn" and path not in grants():
+            return "auto:learn"   # the path's own default, not a grant
         return f"grant:{grants_file()}#{path}"
 
     @property
@@ -324,8 +329,8 @@ def _validate(data: dict) -> None:
         raise ConfigError("budget.recall_chars cannot exceed budget.total_chars")
     if b["prompt_chars"] > b["total_chars"]:
         raise ConfigError("budget.prompt_chars cannot exceed budget.total_chars")
-    if b["principles_chars"] > b["total_chars"]:
-        raise ConfigError("budget.principles_chars cannot exceed budget.total_chars")
+    if b["beliefs_chars"] > b["total_chars"]:
+        raise ConfigError("budget.beliefs_chars cannot exceed budget.total_chars")
     if not isinstance(data["namespace"], str) or not data["namespace"]:
         raise ConfigError("namespace: must be a non-empty string")
     paths.safe_name(data["namespace"])
@@ -349,7 +354,7 @@ def _validate(data: dict) -> None:
             raise ConfigError(f"isolation.checks: unknown check {c!r}; expected one of {sorted(known)}")
 
 
-SIGNALS = ("recurring", "surprise", "not-holding", "manual")
+SIGNALS = ("contradiction", "not-holding", "surprise", "recurring", "manual")
 
 
 def _strings(v) -> bool:
@@ -371,10 +376,11 @@ def _validate_learning(data: dict) -> None:
     sim = lr.get("similarity")
     if not _finite_number(sim) or not 0 < sim <= 1:
         raise ConfigError("learn.similarity must be a number above 0, at most 1")
-    for k in ("recur_min", "match_min", "check_chars", "stale_after"):
+    for k in ("recur_min", "match_min", "max_new", "check_chars"):
         if not _positive_int(lr.get(k)) or lr[k] > MAX_JOURNAL_NUMBER:
             raise ConfigError(f"learn.{k} must be a positive integer, at most {MAX_JOURNAL_NUMBER}")
-    for k in ("pitfall_sections", "surprise_sections", "lesson_sections", "ruling_sections"):
+    for k in ("pitfall_sections", "surprise_sections", "lesson_sections", "ruling_sections",
+              "change_sections"):
         if not _strings(lr.get(k)):
             raise ConfigError(f"learn.{k} must be a list of strings")
     floor = cu.get("confidence_floor")
@@ -627,7 +633,7 @@ def load(cwd: Path | str | None = None) -> Config:
     b = data["budget"]
     # A part nobody set is a default, and a default never makes a lowered
     # total an error: it follows the total down too.
-    for k in ("core_chars", "recall_chars", "prompt_chars", "principles_chars"):
+    for k in ("core_chars", "recall_chars", "prompt_chars", "beliefs_chars"):
         if (project_lowered_total or k not in budget_set) \
                 and isinstance(b.get(k), int) and isinstance(b.get("total_chars"), int):
             b[k] = min(b[k], b["total_chars"])

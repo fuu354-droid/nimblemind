@@ -70,6 +70,6 @@ def gaps_list(*, cwd: str | None = None, namespace: str | None = None) -> list[d
     return [{k: v for k, v in g.items() if k != "_rec"} for g in research.ranked(cfg)]
 
 
-def principles_list(*, cwd: str | None = None, namespace: str | None = None) -> list[dict]:
-    cfg = _cfg(cwd, namespace)
-    return [{"source_id": r.source_id, **p} for r, p in learn.active_principles(cfg)]
+def beliefs_list(*, cwd: str | None = None, namespace: str | None = None) -> list[dict]:
+    """Every belief that is not retired, with status, confidence and counts."""
+    return [b for b in learn.report(_cfg(cwd, namespace)) if b["status"] != "retired"]
