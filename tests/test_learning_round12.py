@@ -130,3 +130,15 @@ def test_r12_a_session_known_only_by_its_transcript_keeps_its_shown_set(cfg, use
     assert meta["session_id"].startswith("t:") and bid in meta.get("beliefs_shown", [])
     learn.run(c)
     assert one(c, L1)["for"] == 1
+
+
+def test_r12_a_hook_that_injects_nothing_still_records_the_session(cfg, tmp_path, monkeypatch):
+    cfg()
+    tr = tmp_path / "t.jsonl"
+    tr.write_text("{}", encoding="utf-8")
+    p = {"cwd": str(tmp_path), "transcript_path": str(tr), "prompt": "ok"}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(p)))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    assert cli.main(["hook", "prompt"]) == 0
+    sys.stdout = sys.__stdout__
+    assert recall.recorded(recall.session_key_for("", str(tr)))
