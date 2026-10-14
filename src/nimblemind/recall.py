@@ -210,12 +210,18 @@ def assemble(cfg) -> str:
 PLACEHOLDER_IDS = frozenset({"", "unknown", "null", "none", "undefined", "nil"})
 
 
+def real_session_id(session_id) -> str:
+    """The harness's own session id, or "" for a missing or placeholder one."""
+    s = session_id.strip() if isinstance(session_id, str) else ""
+    return s if s and s.lower() not in PLACEHOLDER_IDS else ""
+
+
 def session_key_for(session_id, transcript_path: str = "") -> str:
     """The key a session's shown set is kept under: its id, or when the
     harness sends none (or a placeholder), its transcript path, which the
     hooks and the distill child both see; "" when neither exists."""
-    s = session_id.strip() if isinstance(session_id, str) else ""
-    if s and s.lower() not in PLACEHOLDER_IDS:
+    s = real_session_id(session_id)
+    if s:
         return s
     if isinstance(transcript_path, str) and transcript_path.strip():
         path = os.path.normpath(transcript_path) if os.path.isabs(transcript_path) else transcript_path

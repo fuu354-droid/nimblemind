@@ -184,7 +184,7 @@ def cmd_hook(args) -> int:
                 # harness that reuses its file: it records what was shown, for
                 # learning, but never withholds anything from a prompt.
                 block, ids = recall.prompt_block(cfg, payload.get("prompt", ""),
-                                                 "" if sid.startswith("t:") else sid)
+                                                 recall.real_session_id(payload.get("session_id", "")))
                 render = h.prompt_output
             recall.remember(sid, ids if block else [])
             if block:

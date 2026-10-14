@@ -109,7 +109,7 @@ def distill(cfg, transcript_path: str, session_id: str) -> str:
     # its transcript); none means what it was shown cannot be known.
     key = recall.session_key_for(session_id, os.path.abspath(transcript_path))
     # A key made from the transcript is only good if the hooks used it too.
-    if key.startswith("t:") and not recall.recorded(key):
+    if not recall.real_session_id(session_id) and not recall.recorded(key):
         key = ""
     listed, shown = _listed_beliefs(cfg, key)
     system = journal.instructions(cfg, listed)
