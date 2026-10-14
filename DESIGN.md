@@ -655,10 +655,12 @@ Every belief has a birth time: the session it came from for a lesson or
 ruling, otherwise the moment it was written; and an end: its successor's
 birth, or a person retiring it. No journal after the end is evidence about
 it (its successor's, if it applies). An independent restatement counts
-whenever it happened, before the birth included, except from the records a
-belief was drawn from: a research belief is never supported by the sessions
-that raised its question or by the answer it came from, and a session that
-was shown one of those records is not independent of it either. A revision
+whenever it happened, before the birth included, except from what a belief
+was drawn from, as it stands at derivation time: a research belief is never
+supported by any session that raised its question (every occurrence of the
+gap, including journals approved later) or by a session shown the answer it
+came from, and a revision never by a session that was a counter-example to
+the belief it revises. A revision
 takes over at its own birth (section 15.5).
 
 The unit of independence is the session (the journal's `session_id`): one
@@ -770,8 +772,10 @@ Signals, each built from a fixed template, never by a model:
 | `manual` | `nimblemind gap add` | the given impact, default 2 |
 
 A signal similar to an open gap (or, for the belief signals, about the same
-belief) merges into it instead of adding one: every matching journal is an
-occurrence, whenever it is from. At most five new gaps per run, highest
+belief) and of the same kind merges into it instead of adding one: every
+matching journal is an occurrence, whenever it is from. A verified gap
+absorbs a journal older than its answer (an old occurrence approved late)
+and never reopens for it; a newer one is a new question. At most five new gaps per run, highest
 weight first; the rest are written by later runs.
 
 `research` ranks `open` and `recurred` gaps:
