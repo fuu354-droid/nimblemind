@@ -519,8 +519,21 @@ def _belief_entry(w: _World, rec: Record, p: dict, done: dict[str, dict]) -> dic
     # and the answers it came from: a session shown one of those answers is
     # not independent of it. Journals shown at session start show only their
     # core sections, never the lessons, so showing a journal is not counted.
-    derived_sessions = {w.parts[x]["session"] for x in derived if x in w.parts}
     derived_answers = {x for x in derived if x.startswith("answer:")}
+    drawn = set(derived)
+    if origin == "research":
+        # Every session that raised its question, as the gap stands now, not
+        # only those visible when the answer was written.
+        gap_ids = {a.metadata.get("gap") for a, _ in w.answers if a.source_id in derived_answers}
+        for g, _ in w.gaps:
+            if g.source_id in gap_ids:
+                occ, later = _gap_occurrences(w, g, done)
+                drawn |= set(occ) | {jid for _, jid in later}
+    sup_id = rec.metadata.get("supersedes")
+    if origin == "revision" and isinstance(sup_id, str) and sup_id in done:
+        # Every counter-example of the belief it revises, as derived now.
+        drawn |= {e["ref"] for e in done[sup_id]["evidence"] if e["dir"] == "against"}
+    derived_sessions = {w.parts[x]["session"] for x in drawn if x in w.parts}
     sig = signature(p)
     ends = [w.born(s) for s in w.succ.get(sid, [])]
     retire_at = min((e["at"] for e in w.events if e["action"] == "retire" and e["id"] == sid),
@@ -601,16 +614,17 @@ def _belief_entry(w: _World, rec: Record, p: dict, done: dict[str, dict]) -> dic
             "stale_since": max(stale_marks, key=_when) if stale_marks else None}
 
 
-def _gap_entry(w: _World, rec: Record, p: dict, beliefs: dict[str, dict]) -> dict:
-    lr, cu = w.lr, w.cu
-    th = lr["similarity"]
+def _gap_occurrences(w: _World, rec: Record, beliefs: dict[str, dict]) -> tuple[list[str], list[tuple[str, str]]]:
+    """(the journals in the gap's own evidence, (time, journal id) of every
+    other journal whose signal matches it, whenever the journal is from)."""
+    th = w.lr["similarity"]
     meta = rec.metadata
     signal = meta.get("signal") if meta.get("signal") in WEIGHT else "manual"
     bel = meta.get("belief") if isinstance(meta.get("belief"), str) else ""
-    bel = bel if _TOKEN_STR.match(bel or "x") else ""
     occ = [x for x in (meta.get("evidence") or []) if isinstance(x, str) and _TOKEN_STR.match(x)]
+    p = parse_gap(rec.content) or {"question": ""}
     subject = content_tokens(gap_subject(p["question"]))
-    later: list[tuple[str, str]] = []          # (time, journal id), whenever the journal is from
+    later: list[tuple[str, str]] = []
     for j in w.journals:
         if j.source_id in occ:
             continue
@@ -625,6 +639,16 @@ def _gap_entry(w: _World, rec: Record, p: dict, beliefs: dict[str, dict]) -> dic
             hit = any(e["ref"] == j.source_id and e["dir"] == "against" for e in beliefs[bel]["evidence"])
         if hit:
             later.append((j.created_at, j.source_id))
+    return occ, later
+
+
+def _gap_entry(w: _World, rec: Record, p: dict, beliefs: dict[str, dict]) -> dict:
+    lr, cu = w.lr, w.cu
+    meta = rec.metadata
+    signal = meta.get("signal") if meta.get("signal") in WEIGHT else "manual"
+    bel = meta.get("belief") if isinstance(meta.get("belief"), str) else ""
+    bel = bel if _TOKEN_STR.match(bel or "x") else ""
+    occ, later = _gap_occurrences(w, rec, beliefs)
     timeline = [(a.created_at, "a", a, s) for a, s in w.answers if a.metadata.get("gap") == rec.source_id]
     timeline += [(t, "j", jid, None) for t, jid in later]
     timeline.sort(key=lambda x: (_when(x[0]), x[1]))
@@ -825,6 +849,7 @@ def _journal_signals(w: _World, j: Record, done: set[str]) -> list[dict]:
                         "item": "", "tokens": frozenset()})
     jt = _token(j.source_id)
     for s in out:
+        s["at"] = j.created_at
         what = s["belief"] or s["item"]
         s["key"] = f"sig:{s['signal']}:{jt}:{hashlib.sha256(what.encode('utf-8')).hexdigest()[:16]}"
     pending = [s for s in out if s["key"] not in done]
@@ -938,13 +963,14 @@ def _revisions(cfg, w: _World, state: dict, done: set[str]) -> tuple[int, list[d
 def _merge_target(state, gaps, s: dict, threshold: float):
     for rec, _ in gaps:
         g = state["gaps"].get(rec.source_id)
-        if g and g["status"] == "verified":
+        if g and g["status"] == "verified" and not (
+                s.get("at") and g.get("answered_at") and not after(s["at"], g["answered_at"])):
+            continue      # it stopped; a journal from before the answer is an old occurrence
+        if rec.metadata.get("signal") != s["signal"]:
             continue
         if s["belief"]:
             if rec.metadata.get("belief") == s["belief"] and rec.metadata.get("signal") == s["signal"]:
                 return rec
-            continue
-        if rec.metadata.get("belief"):
             continue
         parsed = parse_gap(rec.content)
         if parsed and similar(content_tokens(gap_subject(parsed["question"])), s["tokens"], threshold):

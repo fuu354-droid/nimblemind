@@ -1166,3 +1166,83 @@ def test_r3_o3_a_gap_with_a_pending_answer_is_not_researched_again(cfg, user_con
 def test_r3_o6_the_provider_door_stores_notes_only():
     with pytest.raises(ValueError):
         api.store("## Belief checks\n- B-1a2b3c4d: followed", kind="journal")
+
+
+# ---- v0.2.0 round 4 findings ----------------------------------------------
+
+REV = "recall only the unfinished part at session start"
+
+
+def test_r4_f1_a_late_journal_that_raised_the_question_never_supports_the_answer(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nx\n\n## Confidence\n90\n\n## Belief\n"
+                + draft(statement="pin compose healthchecks with a start period", applies="compose services"))
+    for p in ("research", "gap"):
+        config_mod.set_grant(p, True)
+    c = cfg()
+    writes.write(c, "distill", "journal", jtext(
+        Pitfalls=PIT3, Lessons_learned="- pin compose healthchecks with a start period for compose services"),
+        source_id="session:0", metadata={"session_id": "S0"})
+    put(c, "session:1", Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
+    learn.run(c)
+    research.run(c, 1)
+    e = [x for x in writes.pending(c) if x["record"]["source_id"] == "session:0"][0]
+    writes.approve(c, e["id"], by="t")
+    learn.run(c)
+    assert one(c, "pin compose healthchecks with a start period")["for"] == 0
+
+
+def test_r4_f2_a_late_counter_session_never_supports_the_revision(cfg, reviser):
+    reviser(statement=REV, applies="resuming the same task as the last session", not_when="a different task")
+    c = cfg()
+    for i, text in enumerate([L1, L1b, L1c], 1):
+        put(c, f"session:{i}", metadata={"session_id": f"S{i}"}, Lessons_learned=f"- {text}")
+    learn.run(c)
+    old = one(c, L1)
+    writes.write(c, "distill", "journal", jtext(
+        Pitfalls=COUNTER, Lessons_learned=f"- {REV} when resuming the same task as the last session"),
+        source_id="session:4", metadata={"session_id": "S4", "beliefs_listed": [old["bid"]]})
+    put(c, "session:5", metadata={"session_id": "S5", "beliefs_listed": [old["bid"]]}, Pitfalls=COUNTER)
+    learn.run(c)
+    new = one(c, REV)
+    e = [x for x in writes.pending(c) if x["record"]["source_id"] == "session:4"][0]
+    writes.approve(c, e["id"], by="t")
+    learn.run(c)
+    ev = learn.load_state(c)["beliefs"][new["source_id"]]["evidence"]
+    assert not any(x["session"] == "s:S4" for x in ev)
+
+
+def test_r4_f3_a_surprise_and_a_pitfall_are_separate_questions(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nadd start_period\n\n## Confidence\n90\n")
+    for p in ("research", "gap"):
+        config_mod.set_grant(p, True)
+    c = cfg()
+    put(c, "session:1", Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
+    learn.run(c)
+    research.run(c, 1)
+    put(c, "session:3", Surprises="- qdrant healthcheck has no start_period so compose up aborts first time")
+    learn.run(c)
+    assert sorted(g["signal"] for g in research.ranked(c)) == ["recurring", "surprise"]
+
+
+def test_r4_f4_a_late_old_journal_does_not_duplicate_a_verified_gap(cfg, user_config, fake_model):
+    _researcher(user_config, fake_model, "## Answer\nadd start_period\n\n## Confidence\n90\n",
+                extra="[curiosity]\nverify_window = 2\n")
+    for p in ("research", "gap"):
+        config_mod.set_grant(p, True)
+    c = cfg()
+    writes.write(c, "distill", "journal", jtext(Pitfalls=PIT3), source_id="session:0")
+    put(c, "session:1", Pitfalls=PIT)
+    put(c, "session:2", Pitfalls=PIT2)
+    learn.run(c)
+    research.run(c, 1)
+    put(c, "session:3", Unfinished="- other")
+    put(c, "session:4", Unfinished="- other again")
+    learn.run(c)
+    assert research.ranked(c)[0]["status"] == "verified"
+    e = [x for x in writes.pending(c) if x["record"]["source_id"] == "session:0"][0]
+    writes.approve(c, e["id"], by="t")
+    learn.run(c)
+    gaps = research.ranked(c)
+    assert len(gaps) == 1 and gaps[0]["status"] == "verified" and gaps[0]["occurrences"] == 3
