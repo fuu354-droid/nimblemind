@@ -88,3 +88,14 @@ def test_r14_o1_session_start_records_under_a_transcript_key(cfg, tmp_path, monk
     assert cli.main(["hook", "session-start", "--harness", "generic"]) == 0
     sys.stdout = sys.__stdout__
     assert "belief:B-0000aaaa" in recall.injected(recall.session_key_for("", str(tr)))
+
+
+def test_r15_o1_distill_keeps_a_real_id_that_looks_like_a_transcript_key(cfg, user_config, fake_model, tmp_path):
+    user_config(f'[distiller]\ncommand = "argv"\nargv = {toml_list(fake_model(jtext()))}\n[learn]\nauto = false\n')
+    c = cfg()
+    tr = tmp_path / "t.jsonl"
+    tr.write_text("\n".join(json.dumps({"type": "user", "origin": {"kind": "human"},
+                                       "message": {"content": f"do {i}"}}) for i in range(4)), encoding="utf-8")
+    assert distill.distill(c, str(tr), "t:abc") == "pending"
+    meta = writes.pending(c)[0]["record"]["metadata"]
+    assert meta["session_id"] == "t:abc" and "shown_unknown" not in meta
