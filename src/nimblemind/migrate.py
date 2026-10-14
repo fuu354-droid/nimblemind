@@ -55,7 +55,7 @@ def run(cfg, source: Path, kind: str, *, dry_run: bool = False) -> list[str]:
         try:
             rec = Record(source_id=prefix + stem, namespace=cfg.namespace, kind=kind,
                          content=content, metadata={"migrated_from": str(f)},
-                         created_at=mtime.isoformat(timespec="seconds"))
+                         created_at=mtime.isoformat(timespec="microseconds"))
         except ValueError as e:
             lines.append(f"FAIL {f.name}: {e}")
             continue
