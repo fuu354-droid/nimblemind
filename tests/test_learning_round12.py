@@ -146,3 +146,16 @@ def test_g2_o1_a_relative_transcript_is_keyed_like_the_child_keys_it(cfg, tmp_pa
     assert cli.main(["hook", "prompt"]) == 0
     sys.stdout = sys.__stdout__
     assert recall.recorded(recall.session_key_for("", str(tmp_path / "t.jsonl")))
+
+
+def test_r17_o1_session_end_spawns_the_sessions_own_relative_transcript(cfg, tmp_path, monkeypatch):
+    proj, other = tmp_path / "proj", tmp_path / "other"
+    proj.mkdir()
+    other.mkdir()
+    (proj / "t.jsonl").write_text("{}", encoding="utf-8")
+    (other / "t.jsonl").write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(other)
+    spawned = []
+    monkeypatch.setattr(distill, "spawn", lambda path, *a, **k: spawned.append(path))
+    distill.hook(cfg(), {"cwd": str(proj), "transcript_path": "t.jsonl", "session_id": ""})
+    assert spawned == [str(proj / "t.jsonl")]
