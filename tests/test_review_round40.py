@@ -50,3 +50,17 @@ def test_f40_1_trust_path_is_judged_logically(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "confirm", lambda q: "t")
     assert cli.main(["trust", "../proj"]) == 0
     assert str(tmp_path / "logical" / "proj") in capsys.readouterr().out
+
+
+@posix
+def test_f40_1_distill_transcript_joins_the_logical_cwd(tmp_path, monkeypatch):
+    (tmp_path / "physical" / "real").mkdir(parents=True)
+    (tmp_path / "logical").mkdir()
+    os.symlink(tmp_path / "physical" / "real", tmp_path / "logical" / "link")
+    monkeypatch.chdir(tmp_path / "logical" / "link")
+    monkeypatch.setenv("PWD", str(tmp_path / "logical" / "link"))
+    from nimblemind import distill
+    seen = []
+    monkeypatch.setattr(distill, "distill", lambda cfg, transcript, sid: seen.append(transcript) or "skip")
+    assert cli.main(["distill", "--transcript", "../t.jsonl", "--session-id", "s1"]) == 0
+    assert seen == [str(tmp_path / "logical" / "t.jsonl")]
